@@ -47,6 +47,7 @@ pad_center() {
 }
 
 # Pad a string on both sides with a character to a specific length
+pads() { pad_sides "$@"; }
 pad_sides() {
    local string="$1"
    local length="$2"
