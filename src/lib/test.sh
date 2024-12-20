@@ -11,8 +11,8 @@ test_print_name() {
 
 test_print_result() {
    if [ "$1" -eq 0 ]; then
-      echo -e "[${FG_GREEN}PASS${RESET}]"
+      echo -e "[${GREEN}PASS${RESET}]"
    else
-      echo -e "[${FG_RED}FAIL${RESET}]"
+      echo -e "[${RED}FAIL${RESET}]"
    fi
 }
