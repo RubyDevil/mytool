@@ -6,6 +6,10 @@ pad_right() {
    local length="$2"
    local char="${3:- }" # Default to whitespace
    local pad_length=$((length - ${#string}))
+   if ((pad_length <= 0)); then
+      echo -n "$string"
+      return
+   fi
    local padding=$(printf "%0.s${char}" $(seq 1 $pad_length))
    echo -n "${string}${padding}"
 }
@@ -18,6 +22,10 @@ pad_left() {
    local length="$2"
    local char="${3:- }" # Default to whitespace
    local pad_length=$((length - ${#string}))
+   if ((pad_length <= 0)); then
+      echo -n "$string"
+      return
+   fi
    local padding=$(printf "%0.s${char}" $(seq 1 $pad_length))
    echo -n "${padding}${string}"
 }
@@ -30,6 +38,10 @@ pad_center() {
    local length="$3"
    local char="${4:- }" # Default to whitespace
    local pad_length=$((length - ${#string_left} - ${#string_right}))
+   if ((pad_length <= 0)); then
+      echo -n "$string"
+      return
+   fi
    local padding=$(printf "%0.s${char}" $(seq 1 $pad_length))
    echo -n "${string_left}${padding}${string_right}"
 }
