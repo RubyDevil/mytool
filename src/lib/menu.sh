@@ -16,6 +16,8 @@ menu_width=
 menu_tab="    "
 opt_top=4
 opt_left=$((1 + ${#menu_tab}))
+selected_index=0
+previous_index=0
 
 # Heavy:    ━ ┃ ┏ ┓ ┗ ┛ ┣ ┫ ┳ ┻ ╋
 # Light:    ─ │ ┌ ┐ └ ┘ ├ ┤ ┬ ┴ ┼
@@ -33,6 +35,10 @@ menu_build() {
 
    # Hide the cursor
    tput civis
+
+   # Set the selection indexes
+   selected_index=0
+   previous_index=0
 
    # Find the maximum content width (menu options or header)
    local content_width=0
@@ -78,9 +84,6 @@ menu_build() {
 
 # Navigate the menu by redrawing specific parts
 menu_navigate() {
-   local selected_index=0
-   local previous_index=0
-
    # Restore the cursor visibility and reset the terminal in case of exit
    trap 'tput cnorm; clear; exit 0' EXIT
 
@@ -100,7 +103,7 @@ menu_navigate() {
       echo -n ">"
       tput cup $((opt_top + selected_index)) $opt_left
       local task_display_name="${menu_items[(selected_index * 2)]}"
-      echo -e "${INVERSE}${task_display_name}${RESET}"
+      echo -e "${INVERSE}${task_display_name}${INVERSE_OFF}"
 
       # Read user input
       read -rsn1 key
