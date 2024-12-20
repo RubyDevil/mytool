@@ -1,7 +1,8 @@
 #!/bin/bash
 
-source "../lib/test.sh"
-source "../lib/pad.sh"
+script_dir=$(dirname "${BASH_SOURCE[0]}")
+source "$script_dir/../lib/test.sh"
+source "$script_dir/../lib/pad.sh"
 
 # Test the pad_right function
 test_print_name "Pad string to the right" # Print the test name

@@ -1,7 +1,8 @@
 #!/bin/bash
 
-source "../lib/test.sh"
-source "../lib/settings.sh"
+script_dir=$(dirname "${BASH_SOURCE[0]}")
+source "$script_dir/../lib/test.sh"
+source "$script_dir/../lib/settings.sh"
 
 # Test settings_save_to_file
 test_print_name "Saving settings to file"        # Print the test name

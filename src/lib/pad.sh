@@ -1,7 +1,6 @@
 #!/bin/bash
 
 # Pad a string right with a character to a specific length
-alias padr="pad_right"
 pad_right() {
    local string="$1"
    local length="$2"
@@ -10,9 +9,10 @@ pad_right() {
    local padding=$(printf "%0.s${char}" $(seq 1 $pad_length))
    echo -n "${string}${padding}"
 }
+padr() { pad_right "$@"; }
 
 # Pad a string left with a character to a specific length
-alias padl="pad_left"
+padl() { pad_left "$@"; }
 pad_left() {
    local string="$1"
    local length="$2"
@@ -23,7 +23,7 @@ pad_left() {
 }
 
 # Pad in the center of two strings with a character to a specific length
-alias padc="pad_center"
+padc() { pad_center "$@"; }
 pad_center() {
    local string_left="$1"
    local string_right="$2"
