@@ -76,3 +76,25 @@ export MAGENTA="\e[35m" # Foreground color magenta
 export CYAN="\e[36m"    # Foreground color cyan
 export WHITE="\e[37m"   # Foreground color white
 export DEFAULT="\e[39m" # Foreground color default (usually colored)
+
+# Associative table of colors
+declare -x -A COLORS=(
+   [black]=$FG_BLACK
+   [BLACK]=$FG_BLACK
+   [red]=$FG_RED
+   [RED]=$FG_RED
+   [green]=$FG_GREEN
+   [GREEN]=$FG_GREEN
+   [yellow]=$FG_YELLOW
+   [YELLOW]=$FG_YELLOW
+   [blue]=$FG_BLUE
+   [BLUE]=$FG_BLUE
+   [magenta]=$FG_MAGENTA
+   [MAGENTA]=$FG_MAGENTA
+   [cyan]=$FG_CYAN
+   [CYAN]=$FG_CYAN
+   [white]=$FG_WHITE
+   [WHITE]=$FG_WHITE
+   [default]=$FG_DEFAULT
+   [DEFAULT]=$FG_DEFAULT
+)
