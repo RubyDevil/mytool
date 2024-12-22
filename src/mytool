@@ -12,7 +12,7 @@ source "./lib/menu.sh"
 wait_for_key() {
    echo
    echo -e "${DIM}Press any key to continue...${RESET}"
-   read -rsn1
+   read -sn1
 }
 
 # Display the information of a specific settings key
@@ -62,6 +62,11 @@ reverse_proxy_save_config() {
    local port=$2
    local config_file="${settings["NGINX_CONFIG_DIR"]}/${domain}.conf"
 
+   # If the file does not exist, create it
+   if [ ! -f "$config_file" ]; then
+      touch "$config_file"
+   fi
+
    # Write the Nginx configuration to the file
    echo "server {" >"$config_file"
    echo "    listen 80;" >>"$config_file"
@@ -87,7 +92,7 @@ task_add_reverse_proxy() {
 
    # Ask for domain
    echo
-   read -p -r "Enter domain: " domain
+   read -p "Enter domain: " domain
 
    # Check if the domain already exists
    if [ -n "${domains_and_ports[$domain]}" ]; then
@@ -98,7 +103,7 @@ task_add_reverse_proxy() {
    fi
 
    # Ask for port
-   read -p -r "Enter port: " port
+   read -p "Enter port: " port
 
    # Validate the port number
    if ! [[ "$port" =~ ^[0-9]+$ ]] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
@@ -122,7 +127,7 @@ task_add_reverse_proxy() {
 
    # Rebuild the menu
    echo -e "${DIM}Updating menu...${RESET}"
-   update_menu "reverse_proxy"
+   build_menu_reverse_proxy ""
 
    echo
    echo -e "${GREEN}Reverse proxy configuration added.${RESET}"
@@ -140,7 +145,7 @@ task_modify_reverse_proxy() {
 
    # Ask for new port
    echo
-   read -p -r "Enter port [${port}]: " new_port
+   read -p "Enter port [${port}]: " new_port
    new_port=${new_port:-$port}
 
    # Validate the port number
@@ -172,7 +177,7 @@ task_modify_reverse_proxy() {
 
    # Rebuild the menu
    echo -e "${DIM}Updating menu...${RESET}"
-   update_menu "reverse_proxy"
+   build_menu_reverse_proxy ""
 
    echo
    echo -e "${GREEN}Reverse proxy configuration updated.${RESET}"
@@ -190,7 +195,7 @@ task_delete_reverse_proxy() {
 
    # Ask for confirmation
    echo
-   read -p "Are you sure you want to delete the reverse proxy configuration? [y/N] " -n 1 -r
+   read -p "Are you sure you want to delete the reverse proxy configuration? [y/N] " -n 1
    echo
 
    echo
@@ -211,7 +216,7 @@ task_delete_reverse_proxy() {
 
       # Rebuild the menu
       echo -e "${DIM}Updating menu...${RESET}"
-      update_menu "reverse_proxy"
+      build_menu_reverse_proxy ""
 
       echo
       echo -e "${GREEN}Reverse proxy configuration deleted.${RESET}"
@@ -252,14 +257,14 @@ task_modify_settings_key() {
 
    # Ask for new value
    echo
-   read -p -r "Enter new value: " new_value
+   read -p "Enter new value: " new_value
 
    # Ask for confirmation
    echo
    echo -e "Current value: ${value}"
    echo -e "New value: ${new_value}"
    echo
-   read -p "Are you sure you want to update the setting? [y/N] " -n 1 -r
+   read -p "Are you sure you want to update the setting? [y/N] " -n 1
 
    echo
    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
@@ -293,7 +298,7 @@ task_restore_default_settings_key() {
 
    # Ask for confirmation
    echo
-   read -p "Are you sure you want to restore the default value? [y/N] " -n 1 -r
+   read -p "Are you sure you want to restore the default value? [y/N] " -n 1
 
    echo
    if [[ $REPLY =~ ^[Yy]$ ]]; then
@@ -316,9 +321,43 @@ build_menu_main() {
    menu_header="Main Menu"
    menu=(
       "${RED}Exit${RESET}" "exit 0"
-      "Manage reverse proxies" "build_menu_reverse_proxy"
+      "Tools" "build_menu_tools"
       "${DIM}Edit settings${RESET}" "build_menu_settings"
    )
+}
+
+# Display the tools menu
+build_menu_tools() {
+   menu_header="Tools"
+   menu=(
+      "${RED}Back${RESET}" "build_menu_main"
+      "${BLUE}RPM${INVERSE_OFF} ${DIM}(Reverse Proxy Manager)${RESET}" "build_menu_reverse_proxy"
+   )
+}
+
+# Display the settings menu
+build_menu_settings() {
+   # If has argument, build menu for specific setting
+   if [ -n "$1" ]; then
+      menu_header="Edit Setting"
+      menu=(
+         "${RED}Back${RESET}" "build_menu_settings"
+         "${CYAN}Inspect${RESET}" "task_inspect_settings_key $1"
+         "${YELLOW}Modify${RESET}" "task_modify_settings_key $1"
+         "${RED}Restore default${RESET}" "task_restore_default_settings_key $1"
+      )
+      return
+   else
+      # Otherwise, build menu for all settings
+      menu_header="Settings"
+      menu=(
+         "${RED}Back${RESET}" "build_menu_main"
+      )
+      # Add settings to the menu
+      for key in "${!settings[@]}"; do
+         menu+=("${key}${INVERSE_OFF} ${DIM}(current: ${settings[$key]})${RESET}" "build_menu_settings $key")
+      done
+   fi
 }
 
 # Display the reverse proxy menu
@@ -346,31 +385,6 @@ build_menu_reverse_proxy() {
       # Add reverse proxy configurations to the menu
       for domain in "${!domains_and_ports[@]}"; do
          menu+=("${domain} ${INVERSE_OFF}${DIM}(port: ${domains_and_ports[$domain]})${RESET}" "build_menu_reverse_proxy $domain")
-      done
-   fi
-}
-
-# Display the settings menu
-build_menu_settings() {
-   # If has argument, build menu for specific setting
-   if [ -n "$1" ]; then
-      menu_header="Edit Setting"
-      menu=(
-         "${RED}Back${RESET}" "build_menu_settings"
-         "${CYAN}Inspect${RESET}" "task_inspect_settings_key $1"
-         "${YELLOW}Modify${RESET}" "task_modify_settings_key $1"
-         "${RED}Restore default${RESET}" "task_restore_default_settings_key $1"
-      )
-      return
-   else
-      # Otherwise, build menu for all settings
-      menu_header="Settings"
-      menu=(
-         "${DIM}Back${RESET}" "build_menu_main"
-      )
-      # Add settings to the menu
-      for key in "${!settings[@]}"; do
-         menu+=("${key}${INVERSE_OFF} ${DIM}(current: ${settings[$key]})${RESET}" "build_menu_settings $key")
       done
    fi
 }
