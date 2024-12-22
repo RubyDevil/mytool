@@ -1,10 +1,7 @@
 #!/bin/bash
 
-# Remove ANSI escape codes from a string
-strip_ansi() {
-   # Use awk to remove escape sequences
-   echo "$1" | awk '{ gsub(/(\\e|\\x1b|\033)\[[0-9;]*m/, ""); print }'
-}
+script_dir=$(dirname "${BASH_SOURCE[0]}")
+source "$script_dir/ansi.sh"
 
 # Pad a string right with a character to a specific length
 pad_right() {

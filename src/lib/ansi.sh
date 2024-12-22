@@ -1,5 +1,18 @@
 #!/bin/bash
 
+# Remove ANSI escape codes from a string
+strip_ansi() {
+   # Use awk to remove escape sequences
+   echo -n "$1" | awk '{ gsub(/(\\e|\\x1b|\033)\[[0-9;]*m/, ""); print }'
+}
+
+# Return the length of a string without ANSI escape codes
+slen() { stripped_length "$@"; }
+stripped_length() {
+   echo -n "$(strip_ansi "$1" | wc -c)"
+}
+
+# ANSI escape codes
 export RESET="\e[0m"             # Reset all attributes
 export BOLD="\e[1m"              # Bold
 export DIM="\e[2m"               # Dim
