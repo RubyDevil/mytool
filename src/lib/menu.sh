@@ -4,6 +4,7 @@ script_dir=$(dirname "${BASH_SOURCE[0]}")
 source "$script_dir/ansi.sh"
 source "$script_dir/pad.sh"
 source "$script_dir/settings.sh"
+source "$script_dir/tools/reverse_proxy.sh"
 
 # New configurable settings (override by editing the associative array `settings` before calling menu_start):
 #   MENU_TOP / MENU_LEFT        Integer >=0. Screen row/col where the top-left corner of the menu box is placed. Default 0/0.
@@ -12,7 +13,6 @@ source "$script_dir/settings.sh"
 #   MENU_MIN_HEIGHT / MENU_MAX_HEIGHT Total outer height (borders + header + spacers + visible option rows). Visible option rows = height - 6.
 #                                   Scrolling still lists all options; only the visible window changes. If MAX not set uses available terminal space.
 #                                   If MIN forces more space than available terminal rows, it is reduced to fit.
-#   MENU_CLEAR_SCREEN           1 (default) = clear entire screen before building menu. 0 = only draw the menu region (less flicker, leaves prior output).
 # Behavior notes:
 #   * Width calculation order: Measure widest header/option -> + padding -> clamp with MIN/MAX -> recompute content width.
 #   * Truncation adds a single Unicode ellipsis provided there is at least 1 column for content.
@@ -43,11 +43,6 @@ declare -i max_options           # The maximum number of options that can be dis
 declare -i top_option            # The index of last option that is displayed
 declare -i previous_top_option=0 # The index of the last option that was displayed
 
-# Track previous draw region to allow precise clearing when not doing full screen clears
-declare -i _prev_menu_width=0
-declare -i _prev_total_height=0
-declare -i _prev_base_top=0
-declare -i _prev_base_left=0
 
 # Draw the entire menu with a border
 menu_build() {
@@ -185,21 +180,8 @@ menu_build() {
    selected_index=0
    previous_index=0
 
-   # Clear screen (configurable) & hide cursor
-   local clear_screen=${settings["MENU_CLEAR_SCREEN"]:-1}
-   if [[ $clear_screen == 1 || $clear_screen == "true" ]]; then
-      clear
-   else
-      # Selective region clear: erase previous menu rectangle to avoid artifacts (e.g., stray vertical bar)
-      if (( _prev_menu_width > 0 )); then
-         local rows_to_clear=$_prev_total_height
-         for ((r=0; r<rows_to_clear; r++)); do
-            tput cup $((_prev_base_top + r)) $_prev_base_left
-            # Print spaces covering previous width (avoid trailing artifacts when new width is smaller)
-            printf '%*s' $_prev_menu_width ' '
-         done
-      fi
-   fi
+   # Always clear the entire screen for a deterministic fresh draw
+   clear
    tput civis
 
    # Helper function (cannot be declared with 'local' in bash)
@@ -214,7 +196,21 @@ menu_build() {
    if (( $(slen "$header_display") > content_width )); then
       header_display="$(echo -n "$header_display" | cut -c1-$((content_width-1)))…"
    fi
-   print_at 1 "${BORDER_COLOR}${BORDER_TYPE[1010]}${FG_DEFAULT}${menu_tab}$(pads "$header_display" "$content_width")${menu_tab}${BORDER_COLOR}${BORDER_TYPE[1010]}${FG_DEFAULT}"
+   # Build header line ensuring exact width even for edge parity cases
+   local header_inner="${menu_tab}$(pads "$header_display" "$content_width")${menu_tab}"
+   local expected_inner_len=$(( (${#menu_tab} * 2) + content_width ))
+   # Measure visible length (strip ANSI)
+   local header_inner_len=$(slen "$header_inner")
+   if (( header_inner_len > expected_inner_len )); then
+      # Trim extra (rare off-by-one scenarios)
+      local trim=$((header_inner_len - expected_inner_len))
+      header_inner="$(echo -n "$header_inner" | head -c $expected_inner_len)"
+   elif (( header_inner_len < expected_inner_len )); then
+      # Pad right to fill
+      local pad_needed=$((expected_inner_len - header_inner_len))
+      header_inner="${header_inner}$(printf '%*s' $pad_needed '')"
+   fi
+   print_at 1 "${BORDER_COLOR}${BORDER_TYPE[1010]}${FG_DEFAULT}${header_inner}${BORDER_COLOR}${BORDER_TYPE[1010]}${FG_DEFAULT}"
    print_at 2 "${BORDER_COLOR}$(padc "${BORDER_TYPE[1110]}" "${BORDER_TYPE[1011]}" "$menu_width" "${BORDER_TYPE[0101]}")${FG_DEFAULT}"
    print_at 3 "$empty_line"
 
@@ -236,11 +232,7 @@ menu_build() {
    ((rel_row++))
    print_at $rel_row "${BORDER_COLOR}$(padc "${BORDER_TYPE[1100]}" "${BORDER_TYPE[1001]}" "$menu_width" "${BORDER_TYPE[0101]}")${FG_DEFAULT}"
 
-   # Record current region for next rebuild (if not clearing full screen)
-   _prev_menu_width=$menu_width
-   _prev_total_height=$(( (rel_row + 1) ))
-   _prev_base_top=$base_top
-   _prev_base_left=$base_left
+   # Previous region tracking removed (always clearing screen now)
 }
 
 # Navigate the menu by redrawing specific parts

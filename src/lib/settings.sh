@@ -19,7 +19,6 @@ default_settings["MENU_MIN_WIDTH"]="0"              # 0 = auto
 default_settings["MENU_MAX_WIDTH"]="0"              # 0 = unlimited
 default_settings["MENU_MIN_HEIGHT"]="0"             # 0 = auto
 default_settings["MENU_MAX_HEIGHT"]="0"             # 0 = fit terminal
-default_settings["MENU_CLEAR_SCREEN"]="1"           # 1 = clear screen before drawing
 
 # --- Settings metadata -------------------------------------------------------------------------
 # Types: enum | bool | int | string
@@ -35,7 +34,6 @@ settings_types["MENU_MIN_WIDTH"]="int"
 settings_types["MENU_MAX_WIDTH"]="int"
 settings_types["MENU_MIN_HEIGHT"]="int"
 settings_types["MENU_MAX_HEIGHT"]="int"
-settings_types["MENU_CLEAR_SCREEN"]="bool"
 
 # Enumerated values (space-separated lists)
 declare -A settings_enums
@@ -44,7 +42,20 @@ settings_enums["MENU_BORDER_COLOR"]="FG_DEFAULT FG_WHITE FG_RED FG_GREEN FG_YELL
 settings_enums["MENU_POINTER_COLOR"]="FG_DEFAULT FG_WHITE FG_RED FG_GREEN FG_YELLOW FG_BLUE FG_MAGENTA FG_CYAN"
 settings_enums["MENU_POINTER_TYPE"]="> ▶ ➤ → *"
 # Boolean is treated as enum 0/1 for simplicity
-settings_enums["MENU_CLEAR_SCREEN"]="0 1"
+
+# Groupings
+MENU_SETTINGS_KEYS=(
+   MENU_BORDER_TYPE
+   MENU_BORDER_COLOR
+   MENU_POINTER_COLOR
+   MENU_POINTER_TYPE
+   MENU_TOP
+   MENU_LEFT
+   MENU_MIN_WIDTH
+   MENU_MAX_WIDTH
+   MENU_MIN_HEIGHT
+   MENU_MAX_HEIGHT
+)
 
 # Helper to get type (defaults to string)
 settings_get_type() { local k=$1; echo -n "${settings_types[$k]:-string}"; }
@@ -116,20 +127,43 @@ settings_ui_dispatch_edit() {
 
 # Main settings menu builder (used by application)
 build_menu_settings() {
-   if [ -n "$1" ]; then
-      settings_ui_dispatch_edit "$1"
+   local arg="$1"
+   # If arg matches a setting key, edit it
+   if [ -n "$arg" ] && [ -n "${settings[$arg]+x}" ]; then
+   settings_ui_dispatch_edit "$arg"; return
+   fi
+   # If arg is 'menu', open submenu of menu-related keys
+   if [ "$arg" = "menu" ]; then
+      menu_header="Menu Settings"
+      menu=(
+         "${RED:-}Back${RESET:-}" "build_menu_settings"
+      )
+      for key in "${MENU_SETTINGS_KEYS[@]}"; do
+         local t=$(settings_get_type "$key")
+         local val="${settings[$key]}"; (( ${#val} > 30 )) && val="${val:0:27}..."
+         menu+=("${CYAN:-}$key${RESET:-} ${DIM:-}[$t]${RESET:-} ${DIM:-}(${val})${RESET:-}" "build_menu_settings $key")
+      done
       return
    fi
+   # Root settings (excluding menu group keys, replaced with single entry)
    menu_header="Settings"
    menu=(
       "${RED:-}Back${RESET:-}" "build_menu_main"
+      "${BLUE:-}Menu Settings${RESET:-}" "build_menu_settings menu"
    )
-   local keys=( "${!settings[@]}" )
+   local keys=( )
+   for k in "${!settings[@]}"; do
+      skip=false
+      for mk in "${MENU_SETTINGS_KEYS[@]}"; do
+         if [ "$k" = "$mk" ]; then skip=true; break; fi
+      done
+      $skip && continue
+      keys+=("$k")
+   done
    IFS=$'\n' keys=( $(printf '%s\n' "${keys[@]}" | sort) ); unset IFS
    for key in "${keys[@]}"; do
       local t=$(settings_get_type "$key")
-      local val="${settings[$key]}"
-      if (( ${#val} > 30 )); then val="${val:0:27}..."; fi
+      local val="${settings[$key]}"; (( ${#val} > 30 )) && val="${val:0:27}..."
       menu+=("${CYAN:-}$key${RESET:-} ${DIM:-}[$t]${RESET:-} ${DIM:-}(${val})${RESET:-}" "build_menu_settings $key")
    done
 }
@@ -156,6 +190,9 @@ settings_load_from_file() {
          settings[$key]="${default_settings[$key]}"
       fi
    done
+
+   # Remove deprecated settings
+   unset 'settings[MENU_CLEAR_SCREEN]'
 }
 
 # Save settings to file
