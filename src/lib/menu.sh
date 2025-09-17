@@ -5,6 +5,20 @@ source "$script_dir/ansi.sh"
 source "$script_dir/pad.sh"
 source "$script_dir/settings.sh"
 
+# New configurable settings (override by editing the associative array `settings` before calling menu_start):
+#   MENU_TOP / MENU_LEFT        Integer >=0. Screen row/col where the top-left corner of the menu box is placed. Default 0/0.
+#   MENU_MIN_WIDTH / MENU_MAX_WIDTH  Total outer width of menu (borders included) after content measurement is clamped to this range.
+#                                   If content would exceed MENU_MAX_WIDTH it is truncated with a trailing ellipsis (…). Padding is preserved.
+#   MENU_MIN_HEIGHT / MENU_MAX_HEIGHT Total outer height (borders + header + spacers + visible option rows). Visible option rows = height - 6.
+#                                   Scrolling still lists all options; only the visible window changes. If MAX not set uses available terminal space.
+#                                   If MIN forces more space than available terminal rows, it is reduced to fit.
+#   MENU_CLEAR_SCREEN           1 (default) = clear entire screen before building menu. 0 = only draw the menu region (less flicker, leaves prior output).
+# Behavior notes:
+#   * Width calculation order: Measure widest header/option -> + padding -> clamp with MIN/MAX -> recompute content width.
+#   * Truncation adds a single Unicode ellipsis provided there is at least 1 column for content.
+#   * Height structural constant lines = 6. (top border, header, mid border, spacer, spacer, bottom border). Remaining lines show options.
+#   * Changing any of these settings between actions (e.g. inside a menu command) will re-apply on next menu_build.
+
 # Unicode box drawing characters
 declare -A LIGHT=(["0001"]="╴" ["0010"]="╷" ["0011"]="┐" ["0100"]="╶" ["0101"]="─" ["0110"]="┌" ["0111"]="┬" ["1000"]="╵" ["1001"]="┘" ["1010"]="│" ["1011"]="┤" ["1100"]="└" ["1101"]="┴" ["1110"]="├" ["1111"]="┼")
 declare -A HEAVY=(["0001"]="╸" ["0010"]="╹" ["0011"]="┓" ["0100"]="╺" ["0101"]="━" ["0110"]="┏" ["0111"]="┳" ["1000"]="╹" ["1001"]="┛" ["1010"]="┃" ["1011"]="┫" ["1100"]="┗" ["1101"]="┻" ["1110"]="┣" ["1111"]="╋")
@@ -20,14 +34,20 @@ declare -x -a menu=(
 menu_tab="    "
 menu_width=
 content_width=
-opt_top=4
-opt_left=$((1 + ${#menu_tab}))
+opt_top=4      # Will be recalculated after positioning
+opt_left=$((1 + ${#menu_tab})) # Will be recalculated after positioning
 
 declare -i selected_index
 declare -i previous_index=0
 declare -i max_options           # The maximum number of options that can be displayed
 declare -i top_option            # The index of last option that is displayed
 declare -i previous_top_option=0 # The index of the last option that was displayed
+
+# Track previous draw region to allow precise clearing when not doing full screen clears
+declare -i _prev_menu_width=0
+declare -i _prev_total_height=0
+declare -i _prev_base_top=0
+declare -i _prev_base_left=0
 
 # Draw the entire menu with a border
 menu_build() {
@@ -42,21 +62,21 @@ menu_build() {
    local -n menu_items=menu                     # Use nameref for the menu array
    local menu_length=$((${#menu_items[@]} / 2)) # Each tuple has 2 elements
 
-   # Scroll
-   local max_rows=$(tput lines)
-   max_options=$((max_rows - 6))
-   top_option=0
-   previous_top_option=0
+   # Terminal size
+   local term_rows=$(tput lines)
+   local term_cols=$(tput cols)
 
-   # Set the selection indexes
-   selected_index=0
-   previous_index=0
+   # Positioning from settings (clamped within terminal)
+   local menu_top_setting=${settings["MENU_TOP"]:-0}
+   local menu_left_setting=${settings["MENU_LEFT"]:-0}
+   # Sanitize numeric (fallback to 0 if not integer)
+   [[ $menu_top_setting =~ ^[0-9]+$ ]] || menu_top_setting=0
+   [[ $menu_left_setting =~ ^[0-9]+$ ]] || menu_left_setting=0
+   (( menu_top_setting < 0 )) && menu_top_setting=0
+   (( menu_left_setting < 0 )) && menu_left_setting=0
 
-   # Clear the screen
-   clear
-
-   # Hide the cursor
-   tput civis
+   local base_top=$menu_top_setting
+   local base_left=$menu_left_setting
 
    # Find the maximum content width (menu options or header)
    content_width=0
@@ -69,38 +89,158 @@ menu_build() {
    done
    local header_length=$(slen "$menu_header")
    if [ "$header_length" -gt "$content_width" ]; then
-      content_width=${#menu_header}
+      content_width=$header_length
    fi
 
-   # Setup
+   # Compute initial menu width (content + padding + borders)
    menu_width=$((content_width + 2 + (${#menu_tab} * 2)))
+
+   # Width constraints
+   local min_w_setting=${settings["MENU_MIN_WIDTH"]:-0}
+   local max_w_setting=${settings["MENU_MAX_WIDTH"]:-0}
+   [[ $min_w_setting =~ ^[0-9]+$ ]] || min_w_setting=0
+   [[ $max_w_setting =~ ^[0-9]+$ ]] || max_w_setting=0
+   # Apply min width first
+   if (( min_w_setting > 0 && menu_width < min_w_setting )); then
+      menu_width=$min_w_setting
+   fi
+   # Apply max width (truncate content width if needed)
+   if (( max_w_setting > 0 && menu_width > max_w_setting )); then
+      menu_width=$max_w_setting
+   fi
+
+   # Recalculate content_width from adjusted menu_width (minus padding and borders)
+   local inner_padding=$((2 + (${#menu_tab} * 2)))
+   local adjusted_content_width=$((menu_width - inner_padding))
+   if (( adjusted_content_width < content_width )); then
+      content_width=$adjusted_content_width
+   fi
+   if (( content_width < 1 )); then
+      content_width=1
+   fi
+
+   # Height constraints
+   # Base structural lines: 1 top border, 1 header, 1 middle border, 1 empty spacer above list, N options, 1 empty spacer below list, 1 bottom border = 6 + N
+   # So total_height = 6 + visible_options
+   local min_h_setting=${settings["MENU_MIN_HEIGHT"]:-0}
+   local max_h_setting=${settings["MENU_MAX_HEIGHT"]:-0}
+   [[ $min_h_setting =~ ^[0-9]+$ ]] || min_h_setting=0
+   [[ $max_h_setting =~ ^[0-9]+$ ]] || max_h_setting=0
+
+   # Maximum possible options based on terminal rows (keep within screen)
+   local max_options_by_term=$((term_rows - base_top - 7)) # leave at least one row below; using 7 safety (borders & spacers) -> ensures >=1 option
+   (( max_options_by_term < 1 )) && max_options_by_term=1
+
+   # Derive requested visible options from height constraints
+   # If max height specified, compute max visible options allowed
+   local requested_visible_options
+   if (( max_h_setting > 0 )); then
+      # visible_options = max_h_setting - 6 (structure)
+      requested_visible_options=$((max_h_setting - 6))
+      (( requested_visible_options < 1 )) && requested_visible_options=1
+      if (( requested_visible_options > max_options_by_term )); then
+         requested_visible_options=$max_options_by_term
+      fi
+   else
+      # Default to max fitting terminal
+      requested_visible_options=$max_options_by_term
+   fi
+
+   # Apply min height (ensure at least min_h_setting total height)
+   if (( min_h_setting > 0 )); then
+      local min_visible_options=$((min_h_setting - 6))
+      (( min_visible_options < 1 )) && min_visible_options=1
+      if (( requested_visible_options < min_visible_options )); then
+         requested_visible_options=$min_visible_options
+      fi
+   fi
+
+   max_options=$requested_visible_options
+   # Guard against menu smaller than number of items
+   if (( max_options > menu_length )); then
+      max_options=$menu_length
+   fi
+
+   # Adjust if width exceeds terminal width; clamp and update content width
+   if (( menu_left_setting + menu_width > term_cols )); then
+      menu_width=$(( term_cols - menu_left_setting ))
+      (( menu_width < 10 )) && menu_width=10
+      adjusted_content_width=$((menu_width - inner_padding))
+      if (( adjusted_content_width < content_width )); then
+         content_width=$adjusted_content_width
+      fi
+   fi
+
+   # Compute option region top/left based on final positioning
+   opt_top=$((base_top + 4))
+   opt_left=$((base_left + 1 + ${#menu_tab}))
+
+   # Scroll init
+   top_option=0
+   previous_top_option=0
+   top_option=0
+   previous_top_option=0
+
+   # Set the selection indexes
+   selected_index=0
+   previous_index=0
+
+   # Clear screen (configurable) & hide cursor
+   local clear_screen=${settings["MENU_CLEAR_SCREEN"]:-1}
+   if [[ $clear_screen == 1 || $clear_screen == "true" ]]; then
+      clear
+   else
+      # Selective region clear: erase previous menu rectangle to avoid artifacts (e.g., stray vertical bar)
+      if (( _prev_menu_width > 0 )); then
+         local rows_to_clear=$_prev_total_height
+         for ((r=0; r<rows_to_clear; r++)); do
+            tput cup $((_prev_base_top + r)) $_prev_base_left
+            # Print spaces covering previous width (avoid trailing artifacts when new width is smaller)
+            printf '%*s' $_prev_menu_width ' '
+         done
+      fi
+   fi
+   tput civis
+
+   # Helper function (cannot be declared with 'local' in bash)
+   print_at() { local rel_row=$1; shift; tput cup $((base_top + rel_row)) $base_left; echo -e "$*"; }
+
    empty_line="${BORDER_COLOR}$(padc "${BORDER_TYPE[1010]}" "${BORDER_TYPE[1010]}" "$menu_width")${FG_DEFAULT}"
 
-   # Display the menu top border
-   echo -e "${BORDER_COLOR}$(padc "${BORDER_TYPE[0110]}" "${BORDER_TYPE[0011]}" "$menu_width" "${BORDER_TYPE[0101]}")${FG_DEFAULT}"
+   # Draw components positioned
+   print_at 0 "${BORDER_COLOR}$(padc "${BORDER_TYPE[0110]}" "${BORDER_TYPE[0011]}" "$menu_width" "${BORDER_TYPE[0101]}")${FG_DEFAULT}"
+   # Header (truncate if needed)
+   local header_display="$menu_header"
+   if (( $(slen "$header_display") > content_width )); then
+      header_display="$(echo -n "$header_display" | cut -c1-$((content_width-1)))…"
+   fi
+   print_at 1 "${BORDER_COLOR}${BORDER_TYPE[1010]}${FG_DEFAULT}${menu_tab}$(pads "$header_display" "$content_width")${menu_tab}${BORDER_COLOR}${BORDER_TYPE[1010]}${FG_DEFAULT}"
+   print_at 2 "${BORDER_COLOR}$(padc "${BORDER_TYPE[1110]}" "${BORDER_TYPE[1011]}" "$menu_width" "${BORDER_TYPE[0101]}")${FG_DEFAULT}"
+   print_at 3 "$empty_line"
 
-   # Display the menu header
-   echo -e "${BORDER_COLOR}${BORDER_TYPE[1010]}${FG_DEFAULT}${menu_tab}$(pads "$menu_header" "$content_width")${menu_tab}${BORDER_COLOR}${BORDER_TYPE[1010]}${FG_DEFAULT}"
-
-   # Display the menu middle border
-   echo -e "${BORDER_COLOR}$(padc "${BORDER_TYPE[1110]}" "${BORDER_TYPE[1011]}" "$menu_width" "${BORDER_TYPE[0101]}")${FG_DEFAULT}"
-
-   # Display an empty line
-   echo -e "$empty_line"
-
-   # Display the menu items
    local start_index=$top_option
    local end_index=$((top_option + max_options - 1))
+   (( end_index >= menu_length )) && end_index=$((menu_length-1))
+   local rel_row=4
    for ((i = start_index; i <= end_index; i++)); do
       local task_display_name="${menu_items[(i * 2)]}"
-      echo -e "${BORDER_COLOR}${BORDER_TYPE[1010]}${FG_DEFAULT}${menu_tab}$(padr "$task_display_name" "$content_width")${menu_tab}${BORDER_COLOR}${BORDER_TYPE[1010]}${FG_DEFAULT}"
+      local display_name="$task_display_name"
+      if (( $(slen "$display_name") > content_width )); then
+         display_name="$(echo -n "$display_name" | cut -c1-$((content_width-1)))…"
+      fi
+      print_at $rel_row "${BORDER_COLOR}${BORDER_TYPE[1010]}${FG_DEFAULT}${menu_tab}$(padr "$display_name" "$content_width")${menu_tab}${BORDER_COLOR}${BORDER_TYPE[1010]}${FG_DEFAULT}"
+      ((rel_row++))
    done
 
-   # Display an empty line
-   echo -e "$empty_line"
+   print_at $rel_row "$empty_line"
+   ((rel_row++))
+   print_at $rel_row "${BORDER_COLOR}$(padc "${BORDER_TYPE[1100]}" "${BORDER_TYPE[1001]}" "$menu_width" "${BORDER_TYPE[0101]}")${FG_DEFAULT}"
 
-   # Display the menu bottom border
-   echo -e -n "${BORDER_COLOR}$(padc "${BORDER_TYPE[1100]}" "${BORDER_TYPE[1001]}" "$menu_width" "${BORDER_TYPE[0101]}")${FG_DEFAULT}"
+   # Record current region for next rebuild (if not clearing full screen)
+   _prev_menu_width=$menu_width
+   _prev_total_height=$(( (rel_row + 1) ))
+   _prev_base_top=$base_top
+   _prev_base_left=$base_left
 }
 
 # Navigate the menu by redrawing specific parts
@@ -111,7 +251,7 @@ menu_navigate() {
    local POINTER_TYPE=${settings["MENU_POINTER_TYPE"]:-">"}                 # TODO: Move to top level
 
    # Restore the cursor visibility and reset the terminal in case of exit
-   trap 'tput cnorm; clear; exit 0' EXIT
+   trap 'stty icanon echo; tput cnorm; clear; exit 0' EXIT
 
    # Set terminal to non-canonical mode (raw input)
    stty -icanon -echo
@@ -133,9 +273,19 @@ menu_navigate() {
          end_index=$((selected_index > previous_index ? selected_index : previous_index))
       fi
 
+      # Adjust the range of visible options in case no scrolling is needed
+      if [ "$end_index" -ge "$menu_length" ]; then
+         end_index=$((menu_length - 1))
+      fi
+
       # Redraw the applicatble menu items
       for ((i = start_index; i <= end_index; i++)); do
          local task_display_name="${menu_items[(i * 2)]}"
+         # Truncate if needed
+         local display_name="$task_display_name"
+         if (( $(slen "$display_name") > content_width )); then
+            display_name="$(echo -n "$display_name" | cut -c1-$((content_width-1)))…"
+         fi
          local visual_i=$((i - top_option))
 
          if [ "$i" -ne $selected_index ]; then
@@ -143,11 +293,13 @@ menu_navigate() {
             tput cup $((opt_top + visual_i)) $((opt_left - 2))
             echo -n " "
             tput cup $((opt_top + visual_i)) $opt_left
-            echo -e "$(padr "$task_display_name" "$content_width")"
+            echo -e "$(padr "$display_name" "$content_width")"
          else
             # Redraw the selected option's line
             tput cup $((opt_top + visual_i)) $((opt_left - 2))
-            echo -e "${POINTER_COLOR}${POINTER_TYPE}${FG_DEFAULT} ${INVERSE}$(padr "$task_display_name" "$content_width")${INVERSE_OFF}"
+            # Apply inverse before truncation display
+            local inv_name="${INVERSE}$display_name${INVERSE_OFF}"
+            echo -e "${POINTER_COLOR}${POINTER_TYPE}${FG_DEFAULT} $(padr "$inv_name" "$content_width")"
          fi
       done
 
@@ -173,7 +325,7 @@ menu_navigate() {
             # Wrap around
             if [ "$selected_index" -lt 0 ]; then
                selected_index=$((menu_length - 1))
-               top_option=$((menu_length - max_options))
+               top_option=$((menu_length - max_options < 0 ? 0 : menu_length - max_options))
             fi
             ;;
          # Down arrow key
@@ -199,7 +351,8 @@ menu_navigate() {
          ;;
       # Enter key
       "")
-         # Restore the cursor visibility
+         # Restore terminal to normal mode before executing the task
+         stty icanon echo
          tput cnorm
 
          # Call the associated function
@@ -208,6 +361,10 @@ menu_navigate() {
 
          # Redraw the menu
          menu_build
+
+         # Set terminal to non-canonical mode (raw input)
+         stty -icanon -echo
+         tput civis
          continue
          ;;
       esac

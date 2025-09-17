@@ -2,9 +2,10 @@
 
 # ===== Sources ===================================================================================
 
-source "./lib/ansi.sh"
-source "./lib/settings.sh"
-source "./lib/menu.sh"
+script_dir=$(dirname "${BASH_SOURCE[0]}")
+source "$script_dir/lib/ansi.sh"
+source "$script_dir/lib/settings.sh"
+source "$script_dir/lib/menu.sh"
 
 # ===== Utils =====================================================================================
 
@@ -244,44 +245,6 @@ task_inspect_settings_key() {
 }
 
 # Modify a specific settings key
-task_modify_settings_key() {
-   local key=$1
-   local value=${settings[$key]}
-
-   clear
-
-   # Display key information
-   echo -e -n "$DIM"
-   settings_display_key_info "$key"
-   echo -e -n "$RESET"
-
-   # Ask for new value
-   echo
-   read -p "Enter new value: " new_value
-
-   # Ask for confirmation
-   echo
-   echo -e "Current value: ${value}"
-   echo -e "New value: ${new_value}"
-   echo
-   read -p "Are you sure you want to update the setting? [y/N] " -n 1
-
-   echo
-   if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-      echo -e "${RED}Operation canceled.${RESET}"
-      # Play a beep sound
-      echo -e -n "$BEEP"
-      wait_for_key
-      return
-   else
-      # Update the settings key value
-      settings[$key]=$new_value
-      settings_save
-      echo -e "${GREEN}Setting updated.${RESET}"
-   fi
-
-   wait_for_key
-}
 
 # Restore default value of a specific settings key
 task_restore_default_settings_key() {
@@ -303,7 +266,7 @@ task_restore_default_settings_key() {
    echo
    if [[ $REPLY =~ ^[Yy]$ ]]; then
       settings[$key]=$default_value
-      settings_save
+      settings_save_to_file ""
       echo -e "${GREEN}Default value restored.${RESET}"
    else
       echo -e "${RED}Operation canceled.${RESET}"
@@ -336,29 +299,7 @@ build_menu_tools() {
 }
 
 # Display the settings menu
-build_menu_settings() {
-   # If has argument, build menu for specific setting
-   if [ -n "$1" ]; then
-      menu_header="Edit Setting"
-      menu=(
-         "${RED}Back${RESET}" "build_menu_settings"
-         "${CYAN}Inspect${RESET}" "task_inspect_settings_key $1"
-         "${YELLOW}Modify${RESET}" "task_modify_settings_key $1"
-         "${RED}Restore default${RESET}" "task_restore_default_settings_key $1"
-      )
-      return
-   else
-      # Otherwise, build menu for all settings
-      menu_header="Settings"
-      menu=(
-         "${RED}Back${RESET}" "build_menu_main"
-      )
-      # Add settings to the menu
-      for key in "${!settings[@]}"; do
-         menu+=("${key}${INVERSE_OFF} ${DIM}(current: ${settings[$key]})${RESET}" "build_menu_settings $key")
-      done
-   fi
-}
+# build_menu_settings now provided by settings.sh (built-in)
 
 # Display the reverse proxy menu
 build_menu_reverse_proxy() {
@@ -391,15 +332,7 @@ build_menu_reverse_proxy() {
 
 # ===== Main ======================================================================================
 
-# Default settings
-declare -A default_settings
-default_settings["NGINX_CONFIG_DIR"]="/etc/nginx/conf.d"
-for key in "${!default_settings[@]}"; do
-   settings[$key]="${default_settings[$key]}"
-done
-
-# Load settings
-settings_load
+settings_load_from_file ""
 
 # Build the main menu
 build_menu_main
