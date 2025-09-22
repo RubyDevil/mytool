@@ -130,7 +130,7 @@ build_menu_settings() {
    local arg="$1"
    # If arg matches a setting key, edit it
    if [ -n "$arg" ] && [ -n "${settings[$arg]+x}" ]; then
-   settings_ui_dispatch_edit "$arg"; return
+      settings_ui_dispatch_edit "$arg"; return
    fi
    # If arg is 'menu', open submenu of menu-related keys
    if [ "$arg" = "menu" ]; then
