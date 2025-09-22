@@ -108,7 +108,7 @@ build_menu_reverse_proxy() {
    if [ -n "$1" ]; then
       menu_header="Edit Reverse Proxy"
       menu=(
-         "${RED}Back${RESET}" "build_menu_reverse_proxy"
+         "${RED}Back${RESET}" "menu_back"
          "${YELLOW}Modify${RESET}" "task_modify_reverse_proxy $1"
          "${RED}Delete${RESET}" "task_delete_reverse_proxy $1"
       )
@@ -116,7 +116,7 @@ build_menu_reverse_proxy() {
    fi
    menu_header="Reverse Proxy Manager"
    menu=(
-      "${RED}Back${RESET}" "build_menu_tools"
+      "${RED}Back${RESET}" "menu_back"
       "${GREEN}Add new reverse proxy${RESET}" "task_add_reverse_proxy"
    )
    reverse_proxy_load_configs >/dev/null 2>&1

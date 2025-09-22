@@ -18,8 +18,8 @@ build_menu_main() {
    menu_header="Main Menu"
    menu=(
       "${RED}Exit${RESET}" "exit 0"
-      "Tools" "build_menu_tools"
-      "${DIM}Edit settings${RESET}" "build_menu_settings"
+      "Tools" "menu_open build_menu_tools"
+      "${DIM}Edit settings${RESET}" "menu_open build_menu_settings"
    )
 }
 
@@ -27,8 +27,8 @@ build_menu_main() {
 build_menu_tools() {
    menu_header="Tools"
    menu=(
-      "${RED}Back${RESET}" "build_menu_main"
-      "${BLUE}RPM${INVERSE_OFF} ${DIM}(Reverse Proxy Manager)${RESET}" "build_menu_reverse_proxy"
+      "${RED}Back${RESET}" "menu_back"
+      "${BLUE}RPM${INVERSE_OFF} ${DIM}(Reverse Proxy Manager)${RESET}" "menu_open build_menu_reverse_proxy"
    )
 }
 
@@ -41,8 +41,6 @@ build_menu_tools() {
 
 settings_load_from_file ""
 
-# Build the main menu
-build_menu_main
-
-# Run the menu
+# Build & open the main menu through navigation API, then start
+menu_open build_menu_main
 menu_start

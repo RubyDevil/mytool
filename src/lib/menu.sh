@@ -43,6 +43,35 @@ declare -i max_options           # The maximum number of options that can be dis
 declare -i top_option            # The index of last option that is displayed
 declare -i previous_top_option=0 # The index of the last option that was displayed
 
+# Navigation stack for generic Back behavior
+declare -a menu_history=()
+current_menu_command=""
+
+# Open a new menu (push current onto stack)
+menu_open() {
+   local next_fn=$1; shift || true
+   if [ -n "$current_menu_command" ]; then
+      menu_history+=("$current_menu_command")
+   fi
+   current_menu_command="$next_fn${1:+ }$*"
+   "$next_fn" "$@"
+}
+
+# Go back to previous menu; exit if none
+menu_back() {
+   local last_index=$(( ${#menu_history[@]} - 1 ))
+   if (( last_index < 0 )); then
+      exit 0
+   fi
+   local cmd="${menu_history[$last_index]}"
+   unset 'menu_history[$last_index]'
+   current_menu_command="$cmd"
+   eval "$cmd"
+}
+
+# Allow external scripts to set the current menu command after manual build
+menu_set_current() { current_menu_command="$*"; }
+
 
 # Draw the entire menu with a border
 menu_build() {
