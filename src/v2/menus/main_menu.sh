@@ -4,6 +4,7 @@
 # Source dependencies
 _main_menu_script_dir=$(dirname "${BASH_SOURCE[0]}")
 source "$_main_menu_script_dir/../core/menu_engine.sh"
+source "$_main_menu_script_dir/reverse_proxy_menu.sh"
 source "$_main_menu_script_dir/../../lib/ansi.sh"
 
 # Main menu definition
@@ -43,15 +44,7 @@ menu_settings() {
 }
 
 # Placeholder menus for demonstration
-menu_reverse_proxy() {
-    local -a rpm_options=(
-        "$(menu_option "List Proxies" "echo 'Listing proxies...' && sleep 2" "l")"
-        "$(menu_option "Add Proxy" "echo 'Adding proxy...' && sleep 2" "a")"
-        "$(menu_option "Remove Proxy" "echo 'Removing proxy...' && sleep 2" "r")"
-    )
-    
-    menu_define "Reverse Proxy Manager" rpm_options
-}
+# menu_reverse_proxy is now in reverse_proxy_menu.sh
 
 menu_network() {
     local -a network_options=(
