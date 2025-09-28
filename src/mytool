@@ -2,9 +2,10 @@
 
 # ===== Sources ===================================================================================
 
-source "./lib/ansi.sh"
-source "./lib/settings.sh"
-source "./lib/menu.sh"
+script_dir=$(dirname "${BASH_SOURCE[0]}")
+source "$script_dir/lib/ansi.sh"
+source "$script_dir/lib/settings.sh"
+source "$script_dir/lib/menu.sh"
 
 # ===== Utils =====================================================================================
 
@@ -276,7 +277,7 @@ task_modify_settings_key() {
    else
       # Update the settings key value
       settings[$key]=$new_value
-      settings_save
+      settings_save_to_file ""
       echo -e "${GREEN}Setting updated.${RESET}"
    fi
 
@@ -303,7 +304,7 @@ task_restore_default_settings_key() {
    echo
    if [[ $REPLY =~ ^[Yy]$ ]]; then
       settings[$key]=$default_value
-      settings_save
+      settings_save_to_file ""
       echo -e "${GREEN}Default value restored.${RESET}"
    else
       echo -e "${RED}Operation canceled.${RESET}"
@@ -391,15 +392,7 @@ build_menu_reverse_proxy() {
 
 # ===== Main ======================================================================================
 
-# Default settings
-declare -A default_settings
-default_settings["NGINX_CONFIG_DIR"]="/etc/nginx/conf.d"
-for key in "${!default_settings[@]}"; do
-   settings[$key]="${default_settings[$key]}"
-done
-
-# Load settings
-settings_load
+settings_load_from_file ""
 
 # Build the main menu
 build_menu_main

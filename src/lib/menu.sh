@@ -111,7 +111,7 @@ menu_navigate() {
    local POINTER_TYPE=${settings["MENU_POINTER_TYPE"]:-">"}                 # TODO: Move to top level
 
    # Restore the cursor visibility and reset the terminal in case of exit
-   trap 'tput cnorm; clear; exit 0' EXIT
+   trap 'stty icanon echo; tput cnorm; clear; exit 0' EXIT
 
    # Set terminal to non-canonical mode (raw input)
    stty -icanon -echo
@@ -133,6 +133,11 @@ menu_navigate() {
          end_index=$((selected_index > previous_index ? selected_index : previous_index))
       fi
 
+      # Adjust the range of visible options in case no scrolling is needed
+      if [ "$end_index" -ge "$menu_length" ]; then
+         end_index=$((menu_length - 1))
+      fi
+
       # Redraw the applicatble menu items
       for ((i = start_index; i <= end_index; i++)); do
          local task_display_name="${menu_items[(i * 2)]}"
@@ -147,7 +152,7 @@ menu_navigate() {
          else
             # Redraw the selected option's line
             tput cup $((opt_top + visual_i)) $((opt_left - 2))
-            echo -e "${POINTER_COLOR}${POINTER_TYPE}${FG_DEFAULT} ${INVERSE}$(padr "$task_display_name" "$content_width")${INVERSE_OFF}"
+            echo -e "${POINTER_COLOR}${POINTER_TYPE}${FG_DEFAULT} $(padr "${INVERSE}$task_display_name${INVERSE_OFF}" "$content_width")"
          fi
       done
 
@@ -173,7 +178,7 @@ menu_navigate() {
             # Wrap around
             if [ "$selected_index" -lt 0 ]; then
                selected_index=$((menu_length - 1))
-               top_option=$((menu_length - max_options))
+               top_option=$((menu_length - max_options < 0 ? 0 : menu_length - max_options))
             fi
             ;;
          # Down arrow key
@@ -199,7 +204,8 @@ menu_navigate() {
          ;;
       # Enter key
       "")
-         # Restore the cursor visibility
+         # Restore terminal to normal mode before executing the task
+         stty icanon echo
          tput cnorm
 
          # Call the associated function
@@ -208,6 +214,10 @@ menu_navigate() {
 
          # Redraw the menu
          menu_build
+
+         # Set terminal to non-canonical mode (raw input)
+         stty -icanon -echo
+         tput civis
          continue
          ;;
       esac
