@@ -13,6 +13,11 @@ temporary_dir=$(mktemp -d)
 trap 'rm -rf -- "$temporary_dir"' EXIT
 settings[NGINX_CONFIG_DIR]="$temporary_dir"
 
+settings[NGINX_CONFIG_DIR]="$temporary_dir/missing/conf.d"
+test_run 'Create missing config directory' reverse_proxy_ensure_config_directory
+test_run 'Create configured directory path' test -d "${settings[NGINX_CONFIG_DIR]}"
+settings[NGINX_CONFIG_DIR]="$temporary_dir"
+
 test_run 'Accept valid domain' reverse_proxy_validate_domain example.com
 test_assert_status 'Reject empty domain' 1 reverse_proxy_validate_domain ''
 test_assert_status 'Reject path traversal domain' 1 reverse_proxy_validate_domain '../example.com'

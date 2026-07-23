@@ -62,6 +62,14 @@ vps_setup_generate_key() {
    ssh-keygen -t "$key_type" -f "$key_path"
 }
 
+vps_setup_run_privileged() {
+   if ((EUID == 0)); then
+      "$@"
+   else
+      sudo -- "$@"
+   fi
+}
+
 vps_setup_set_sshd_option() {
    local option="$1"
    local value="$2"
@@ -69,7 +77,7 @@ vps_setup_set_sshd_option() {
    local temporary_file
 
    [[ "$option" =~ ^[A-Za-z]+$ && "$value" =~ ^[A-Za-z0-9]+$ ]] || return 2
-   temporary_file=$(mktemp "${config_file}.XXXXXX") || return 1
+   temporary_file=$(mktemp) || return 1
    awk -v option="$option" -v value="$value" '
       BEGIN { changed = 0 }
       tolower($1) == tolower(option) && !changed {
@@ -83,15 +91,20 @@ vps_setup_set_sshd_option() {
       rm -f -- "$temporary_file"
       return 1
    }
-   chmod --reference="$config_file" "$temporary_file" 2>/dev/null || true
-   mv -- "$temporary_file" "$config_file"
+   if ! vps_setup_run_privileged cp -- "$temporary_file" "$config_file"; then
+      rm -f -- "$temporary_file"
+      return 1
+   fi
+   rm -f -- "$temporary_file"
 }
 
 vps_setup_reload_ssh() {
    if command -v systemctl >/dev/null; then
-      systemctl reload ssh 2>/dev/null || systemctl reload sshd
+      vps_setup_run_privileged systemctl reload ssh 2>/dev/null ||
+         vps_setup_run_privileged systemctl reload sshd
    else
-      service ssh reload 2>/dev/null || service sshd reload
+      vps_setup_run_privileged service ssh reload 2>/dev/null ||
+         vps_setup_run_privileged service sshd reload
    fi
 }
 
@@ -101,14 +114,16 @@ vps_setup_update_sshd_option() {
    local config_file="${VPS_SETUP_SSHD_CONFIG:-/etc/ssh/sshd_config}"
    local backup_file
 
-   backup_file=$(mktemp "${config_file}.backup.XXXXXX") || return 1
-   cp -- "$config_file" "$backup_file" || {
+   backup_file=$(mktemp) || return 1
+   vps_setup_run_privileged cp -- "$config_file" "$backup_file" || {
       rm -f -- "$backup_file"
       return 1
    }
-   if ! vps_setup_set_sshd_option "$option" "$value" || ! sshd -t -f "$config_file" || ! vps_setup_reload_ssh; then
-      mv -- "$backup_file" "$config_file"
+   if ! vps_setup_set_sshd_option "$option" "$value" ||
+      ! vps_setup_run_privileged sshd -t -f "$config_file" || ! vps_setup_reload_ssh; then
+      vps_setup_run_privileged cp -- "$backup_file" "$config_file"
       vps_setup_reload_ssh || true
+      rm -f -- "$backup_file"
       return 1
    fi
    rm -f -- "$backup_file"
@@ -116,14 +131,6 @@ vps_setup_update_sshd_option() {
 
 vps_setup_package_manager() {
    command -v apt-get >/dev/null && printf '%s' apt-get
-}
-
-vps_setup_run_privileged() {
-   if ((EUID == 0)); then
-      "$@"
-   else
-      sudo -- "$@"
-   fi
 }
 
 vps_setup_update_packages() {
