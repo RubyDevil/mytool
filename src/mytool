@@ -66,6 +66,20 @@ settings_validate_value() {
    esac
 }
 
+settings_choice_values() {
+   case "$1" in
+   MENU_BORDER_TYPE)
+      printf '%s\n' LIGHT HEAVY
+      ;;
+   MENU_BORDER_COLOR | MENU_POINTER_COLOR)
+      printf '%s\n' BLACK RED GREEN YELLOW BLUE MAGENTA CYAN WHITE DEFAULT
+      ;;
+   *)
+      return 1
+      ;;
+   esac
+}
+
 settings_sanitize() {
    local key
 
@@ -188,16 +202,10 @@ task_inspect_settings_key() {
    wait_for_key
 }
 
-task_modify_settings_key() {
+task_apply_settings_value() {
    local key="$1"
+   local new_value="$2"
    local old_value="${settings[$key]}"
-   local new_value
-
-   clear
-   printf '%s' "$DIM"
-   settings_display_key_info "$key"
-   printf '%s\n\n' "$RESET"
-   IFS= read -r -p 'Enter new value: ' new_value
 
    if ! settings_validate_value "$key" "$new_value"; then
       print_error "Invalid value for $key."
@@ -205,6 +213,10 @@ task_modify_settings_key() {
       return
    fi
 
+   clear
+   printf '%s' "$DIM"
+   settings_display_key_info "$key"
+   printf '%s\n' "$RESET"
    printf '\nCurrent value: %s\nNew value: %s\n\n' "$old_value" "$new_value"
    if ! prompt_confirm 'Are you sure you want to update the setting? [y/N] '; then
       print_error 'Operation canceled.'
@@ -224,6 +236,19 @@ task_modify_settings_key() {
    build_menu_settings "$key"
    print_success 'Setting updated.'
    wait_for_key
+}
+
+task_modify_settings_key() {
+   local key="$1"
+   local new_value
+
+   clear
+   printf '%s' "$DIM"
+   settings_display_key_info "$key"
+   printf '%s\n\n' "$RESET"
+   IFS= read -r -p 'Enter new value: ' new_value
+
+   task_apply_settings_value "$key" "$new_value"
 }
 
 task_restore_default_settings_key() {
@@ -268,6 +293,21 @@ build_menu_tools() {
    menu_add "${BLUE}RPM${RESET} ${DIM}(Reverse Proxy Manager)${RESET}" build_menu_reverse_proxy
 }
 
+build_menu_settings_choices() {
+   local key="$1"
+   local value
+
+   menu_clear "Choose $key"
+   menu_add "${RED}Back${RESET}" build_menu_settings "$key"
+   while IFS= read -r value; do
+      if [[ "$value" == "${settings[$key]}" ]]; then
+         menu_add "${value} ${DIM}(current)${RESET}" task_apply_settings_value "$key" "$value"
+      else
+         menu_add "$value" task_apply_settings_value "$key" "$value"
+      fi
+   done < <(settings_choice_values "$key")
+}
+
 build_menu_settings() {
    local selected_key="${1-}"
    local key
@@ -277,7 +317,11 @@ build_menu_settings() {
       menu_clear 'Edit Setting'
       menu_add "${RED}Back${RESET}" build_menu_settings
       menu_add "${CYAN}Inspect${RESET}" task_inspect_settings_key "$selected_key"
-      menu_add "${YELLOW}Modify${RESET}" task_modify_settings_key "$selected_key"
+      if settings_choice_values "$selected_key" &>/dev/null; then
+         menu_add "${YELLOW}Choose value${RESET}" build_menu_settings_choices "$selected_key"
+      else
+         menu_add "${YELLOW}Modify${RESET}" task_modify_settings_key "$selected_key"
+      fi
       menu_add "${RED}Restore default${RESET}" task_restore_default_settings_key "$selected_key"
       return
    fi

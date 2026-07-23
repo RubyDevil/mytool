@@ -23,6 +23,23 @@ test_run 'Accept configured heavy border' settings_validate_value MENU_BORDER_TY
 test_assert_status 'Reject unknown border' 1 settings_validate_value MENU_BORDER_TYPE rounded
 test_assert_status 'Reject wide pointer' 1 settings_validate_value MENU_POINTER_TYPE '>>'
 
+build_menu_settings MENU_BORDER_TYPE
+test_assert_equal 'Offer a border choice action' 'Choose value' "$(strip_ansi "${menu_labels[2]}")"
+test_run 'Open border choices' menu_invoke 2
+test_assert_equal 'Build border choice menu' 'Choose MENU_BORDER_TYPE' "$menu_header"
+test_assert_equal 'List light border choice' 'LIGHT (current)' "$(strip_ansi "${menu_labels[1]}")"
+test_assert_equal 'List heavy border choice' 'HEAVY' "$(strip_ansi "${menu_labels[2]}")"
+
+clear_called=0
+clear() { clear_called=1; }
+prompt_confirm() { return 1; }
+wait_for_key() { :; }
+test_run 'Clear choice menu before confirmation' task_apply_settings_value MENU_BORDER_TYPE HEAVY &>/dev/null
+test_assert_equal 'Clear choice menu before confirmation' '1' "$clear_called"
+
+build_menu_settings NGINX_CONFIG_DIR
+test_assert_equal 'Keep free-text setting modifier' 'Modify' "$(strip_ansi "${menu_labels[2]}")"
+
 temporary_dir=$(mktemp -d)
 trap 'rm -rf -- "$temporary_dir"' EXIT
 settings[NGINX_CONFIG_DIR]="$temporary_dir"
