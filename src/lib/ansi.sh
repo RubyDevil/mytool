@@ -1,84 +1,65 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# Remove ANSI escape codes from a string
+# Remove SGR color and style sequences from a string.
 strip_ansi() {
-   # Use awk to remove escape sequences
-   echo -n "$1" | awk '{ gsub(/(\\e|\\x1b|\033)\[[0-9;]*m/, ""); print }'
+   local text="${1-}"
+   local escape_pattern=$'^(.*)\033\[[0-9;:]*m(.*)$'
+   local literal_pattern='^(.*)\\(e|x1b|033)\[[0-9;:]*m(.*)$'
+
+   while [[ "$text" =~ $escape_pattern ]]; do
+      text=${BASH_REMATCH[1]}${BASH_REMATCH[2]}
+   done
+   while [[ "$text" =~ $literal_pattern ]]; do
+      text=${BASH_REMATCH[1]}${BASH_REMATCH[3]}
+   done
+
+   printf '%s' "$text"
 }
 
-# Return the length of a string without ANSI escape codes
-slen() { stripped_length "$@"; }
+# Return the visible character length of a string.
 stripped_length() {
-   echo -n "$(strip_ansi "$1" | wc -c)"
+   local stripped
+   stripped=$(strip_ansi "${1-}")
+   printf '%d' "${#stripped}"
 }
+slen() { stripped_length "$@"; }
 
 # ANSI escape codes
-export RESET="\e[0m"             # Reset all attributes
-export BOLD="\e[1m"              # Bold
-export DIM="\e[2m"               # Dim
-export ITALIC="\e[3m"            # Italic (not widely supported, sometimes treated as inverse or blink)
-export UNDERLINE="\e[4m"         # Underline
-export BLINK="\e[5m"             # Blink
-export RAPID_BLINK="\e[6m"       # Rapid blink
-export INVERSE="\e[7m"           # Inverse (swap foreground and background ANSI)
-export CONCEAL="\e[8m"           # Conceal (hidden)
-export STRIKE="\e[9m"            # Strikethrough
-export PRIMARY_FONT="\e[10m"     # Primary (default) font
-export ALTERNATE_FONT_1="\e[11m" # First alternate font
-export ALTERNATE_FONT_2="\e[12m" # Second alternate font
-export ALTERNATE_FONT_3="\e[13m" # Third alternate font
-export ALTERNATE_FONT_4="\e[14m" # Fourth alternate font
-export ALTERNATE_FONT_5="\e[15m" # Fifth alternate font
-export ALTERNATE_FONT_6="\e[16m" # Sixth alternate font
-export ALTERNATE_FONT_7="\e[17m" # Seventh alternate font
-export ALTERNATE_FONT_8="\e[18m" # Eighth alternate font
-export ALTERNATE_FONT_9="\e[19m" # Ninth alternate font
-export FRAKTUR="\e[20m"          # Fraktur (hardly ever supported)
-export BOLD_OFF="\e[21m"         # Bold off
-export NORMAL_COLOR="\e[22m"     # Normal color or intensity (neither bold nor faint)
-export ITALIC_OFF="\e[23m"       # Italic off
-export UNDERLINE_OFF="\e[24m"    # Underline off
-export BLINK_OFF="\e[25m"        # Blink off
-export INVERSE_OFF="\e[27m"      # Inverse off
-export CONCEAL_OFF="\e[28m"      # Reveal (conceal off)
-export STRIKE_OFF="\e[29m"       # Strikethrough off
-export FG_BLACK="\e[30m"         # Foreground color black
-export FG_RED="\e[31m"           # Foreground color red
-export FG_GREEN="\e[32m"         # Foreground color green
-export FG_YELLOW="\e[33m"        # Foreground color yellow
-export FG_BLUE="\e[34m"          # Foreground color blue
-export FG_MAGENTA="\e[35m"       # Foreground color magenta
-export FG_CYAN="\e[36m"          # Foreground color cyan
-export FG_WHITE="\e[37m"         # Foreground color white
-export FG_DEFAULT="\e[39m"       # Foreground color default (usually colored)
-export BG_BLACK="\e[40m"         # Background color black
-export BG_RED="\e[41m"           # Background color red
-export BG_GREEN="\e[42m"         # Background color green
-export BG_YELLOW="\e[43m"        # Background color yellow
-export BG_BLUE="\e[44m"          # Background color blue
-export BG_MAGENTA="\e[45m"       # Background color magenta
-export BG_CYAN="\e[46m"          # Background color cyan
-export BG_WHITE="\e[47m"         # Background color white
-export BG_DEFAULT="\e[49m"       # Background color default (usually colored)
-export FRAMED="\e[51m"           # Framed
-export ENCIRCLED="\e[52m"        # Encircled
-export OVERLINED="\e[53m"        # Overlined
-export FRAMED_OFF="\e[54m"       # Framed off
-export OVERLINED_OFF="\e[55m"    # Overlined off
+declare -A _ANSI_CODES=(
+   [RESET]=0 [BOLD]=1 [DIM]=2 [ITALIC]=3 [UNDERLINE]=4 [BLINK]=5 [RAPID_BLINK]=6
+   [INVERSE]=7 [CONCEAL]=8 [STRIKE]=9 [PRIMARY_FONT]=10 [ALTERNATE_FONT_1]=11
+   [ALTERNATE_FONT_2]=12 [ALTERNATE_FONT_3]=13 [ALTERNATE_FONT_4]=14
+   [ALTERNATE_FONT_5]=15 [ALTERNATE_FONT_6]=16 [ALTERNATE_FONT_7]=17
+   [ALTERNATE_FONT_8]=18 [ALTERNATE_FONT_9]=19 [FRAKTUR]=20 [BOLD_OFF]=21
+   [NORMAL_COLOR]=22 [ITALIC_OFF]=23 [UNDERLINE_OFF]=24 [BLINK_OFF]=25
+   [INVERSE_OFF]=27 [CONCEAL_OFF]=28 [STRIKE_OFF]=29 [FG_BLACK]=30 [FG_RED]=31
+   [FG_GREEN]=32 [FG_YELLOW]=33 [FG_BLUE]=34 [FG_MAGENTA]=35 [FG_CYAN]=36
+   [FG_WHITE]=37 [FG_DEFAULT]=39 [BG_BLACK]=40 [BG_RED]=41 [BG_GREEN]=42
+   [BG_YELLOW]=43 [BG_BLUE]=44 [BG_MAGENTA]=45 [BG_CYAN]=46 [BG_WHITE]=47
+   [BG_DEFAULT]=49 [FRAMED]=51 [ENCIRCLED]=52 [OVERLINED]=53 [FRAMED_OFF]=54
+   [OVERLINED_OFF]=55
+)
 
-# Shorthands
-export BLACK="\e[30m"   # Foreground color black
-export RED="\e[31m"     # Foreground color red
-export GREEN="\e[32m"   # Foreground color green
-export YELLOW="\e[33m"  # Foreground color yellow
-export BLUE="\e[34m"    # Foreground color blue
-export MAGENTA="\e[35m" # Foreground color magenta
-export CYAN="\e[36m"    # Foreground color cyan
-export WHITE="\e[37m"   # Foreground color white
-export DEFAULT="\e[39m" # Foreground color default (usually colored)
+for key in "${!_ANSI_CODES[@]}"; do
+   printf -v "$key" '\033[%sm' "${_ANSI_CODES[$key]}"
+   export "$key"
+done
+unset _ANSI_CODES
+
+# Foreground color shorthands
+BLACK=$FG_BLACK
+RED=$FG_RED
+GREEN=$FG_GREEN
+YELLOW=$FG_YELLOW
+BLUE=$FG_BLUE
+MAGENTA=$FG_MAGENTA
+CYAN=$FG_CYAN
+WHITE=$FG_WHITE
+DEFAULT=$FG_DEFAULT
+export BLACK RED GREEN YELLOW BLUE MAGENTA CYAN WHITE DEFAULT
 
 # Associative table of ANSI
-declare -x -A ANSI=(
+declare -gA ANSI=(
    ["RESET"]="$RESET"
    ["BOLD"]="$BOLD"
    ["DIM"]="$DIM"
@@ -146,3 +127,7 @@ declare -x -A ANSI=(
 for key in "${!ANSI[@]}"; do
    ANSI["${key,,}"]="${ANSI[$key]}"
 done
+
+BEEP=$'\a'
+export BEEP
+unset key
