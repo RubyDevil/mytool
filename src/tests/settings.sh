@@ -1,33 +1,39 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-script_dir=$(dirname "${BASH_SOURCE[0]}")
-source "$script_dir/../lib/test.sh"
-source "$script_dir/../lib/settings.sh"
+test_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=../lib/test.sh
+source "$test_dir/../lib/test.sh"
+# shellcheck source=../lib/settings.sh
+source "$test_dir/../lib/settings.sh"
+unset test_dir
 
-# Test settings_save_to_file
-test_print_name "Saving settings to file"        # Print the test name
-settings["foo"]="bar"                            # Set a setting
-settings_save_to_file "settings.txt" &>/dev/null # Save the settings to a file
-test -f "settings.txt"                           # Check if the file exists
-result=$?                                        # Store the result of the test
-test_print_result "$result"                      # Print the test result
-if [ "$result" -ne 0 ]; then                     # Clean up and exit if the test failed
-   rm "settings.txt"
-   exit 1
-fi
+temporary_dir=$(mktemp -d)
+settings_path="$temporary_dir/settings.conf"
+marker="$temporary_dir/executed"
+trap 'rm -rf -- "$temporary_dir"' EXIT
 
-# Test settings_load_from_file
-test_print_name "Loading settings from file"       # Print the test name
-declare -A settings                                # Reset the settings array
-settings_load_from_file "settings.txt" &>/dev/null # Load the settings from the file
-test "${settings["foo"]}" == "bar"                 # Check if the setting was loaded correctly
-result=$?                                          # Store the result of the test
-test_print_result "$result"                        # Print the test result
-if [ "$result" -ne 0 ]; then                       # Clean up and exit if the test failed
-   rm "settings.txt"
-   exit 1
-fi
+printf -v complex_value 'line 1\nline 2\nC:\\tools'
+settings[COMPLEX_VALUE]="$complex_value"
+settings[COMMAND_TEXT]="\$(touch \"$marker\")"
+test_run 'Save settings' settings_save_to_file "$settings_path"
 
-# Clean up and exit
-rm "settings.txt"
-exit 0
+settings=()
+test_run 'Load settings' settings_load_from_file "$settings_path"
+test_assert_equal 'Round-trip multiline and backslashes' "$complex_value" "${settings[COMPLEX_VALUE]}"
+test_assert_equal 'Merge missing defaults' 'LIGHT' "${settings[MENU_BORDER_TYPE]}"
+test_run 'Do not execute setting text' test ! -e "$marker"
+test_assert_equal 'Private file permissions' '600' "$(stat -c '%a' "$settings_path")"
+
+printf 'declare -A settings\nsettings["legacy_key"]="legacy value"\n' >"$settings_path"
+test_run 'Load legacy settings format' settings_load_from_file "$settings_path"
+test_assert_equal 'Read legacy value' 'legacy value' "${settings[legacy_key]}"
+
+printf 'unknown_escape=\\q\n' >"$settings_path"
+test_run 'Load unknown escape literally' settings_load_from_file "$settings_path"
+test_assert_equal 'Preserve unknown escape' '\q' "${settings[unknown_escape]}"
+
+printf 'not valid settings syntax\n' >"$settings_path"
+test_assert_status 'Report malformed settings' 1 settings_load_from_file "$settings_path"
+test_assert_equal 'Keep defaults after malformed file' 'LIGHT' "${settings[MENU_BORDER_TYPE]}"
+
+test_finish

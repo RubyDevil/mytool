@@ -1,236 +1,331 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-script_dir=$(dirname "${BASH_SOURCE[0]}")
-source "$script_dir/ansi.sh"
-source "$script_dir/pad.sh"
-source "$script_dir/settings.sh"
+menu_lib_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+if ! declare -F strip_ansi >/dev/null; then
+   # shellcheck source=ansi.sh
+   source "$menu_lib_dir/ansi.sh"
+fi
+if ! declare -F pad_right >/dev/null; then
+   # shellcheck source=pad.sh
+   source "$menu_lib_dir/pad.sh"
+fi
+if ! declare -p settings &>/dev/null; then
+   # shellcheck source=settings.sh
+   source "$menu_lib_dir/settings.sh"
+fi
+unset menu_lib_dir
 
-# Unicode box drawing characters
-declare -A LIGHT=(["0001"]="╴" ["0010"]="╷" ["0011"]="┐" ["0100"]="╶" ["0101"]="─" ["0110"]="┌" ["0111"]="┬" ["1000"]="╵" ["1001"]="┘" ["1010"]="│" ["1011"]="┤" ["1100"]="└" ["1101"]="┴" ["1110"]="├" ["1111"]="┼")
-declare -A HEAVY=(["0001"]="╸" ["0010"]="╹" ["0011"]="┓" ["0100"]="╺" ["0101"]="━" ["0110"]="┏" ["0111"]="┳" ["1000"]="╹" ["1001"]="┛" ["1010"]="┃" ["1011"]="┫" ["1100"]="┗" ["1101"]="┻" ["1110"]="┣" ["1111"]="╋")
-
-declare -x menu_header="Menu"
-declare -x -a menu=(
-   "Exit" "exit 0"
-   "Option 1" "echo 'Option 1' && read -p 'Press Enter to continue'"
-   "Option 2" "echo 'Option 2' && read -p 'Press Enter to continue'"
-   "Option 3" "echo 'Option 3' && read -p 'Press Enter to continue'"
+# Unicode box drawing characters, keyed by connected directions.
+declare -gA MENU_BORDER_LIGHT=(
+   [0001]="╴" [0010]="╷" [0011]="┐" [0100]="╶" [0101]="─" [0110]="┌"
+   [0111]="┬" [1000]="╵" [1001]="┘" [1010]="│" [1011]="┤" [1100]="└"
+   [1101]="┴" [1110]="├" [1111]="┼"
+)
+declare -gA MENU_BORDER_HEAVY=(
+   [0001]="╸" [0010]="╹" [0011]="┓" [0100]="╺" [0101]="━" [0110]="┏"
+   [0111]="┳" [1000]="╹" [1001]="┛" [1010]="┃" [1011]="┫" [1100]="┗"
+   [1101]="┻" [1110]="┣" [1111]="╋"
 )
 
-menu_tab="    "
-menu_width=
-content_width=
-opt_top=4
-opt_left=$((1 + ${#menu_tab}))
+declare -g menu_header="Menu"
+declare -g menu_tab="    "
+declare -ga menu_labels=()
+declare -ga menu_callbacks=()
+declare -ga menu_argument_counts=()
+declare -gA menu_arguments=()
 
-declare -i selected_index
-declare -i previous_index=0
-declare -i max_options           # The maximum number of options that can be displayed
-declare -i top_option            # The index of last option that is displayed
-declare -i previous_top_option=0 # The index of the last option that was displayed
+declare -gi menu_width=0
+declare -gi content_width=0
+declare -gi opt_top=4
+declare -gi opt_left=$((1 + ${#menu_tab}))
+declare -gi selected_index=0
+declare -gi previous_index=0
+declare -gi max_options=1
+declare -gi top_option=0
+declare -gi previous_top_option=0
+declare -g menu_stty_state=""
+declare -gi menu_active=0
 
-# Draw the entire menu with a border
-menu_build() {
-   # ANSI settings
-   local BORDER_TYPE_NAME=${settings["MENU_BORDER_TYPE"]:-"LIGHT"}
-   if ! declare -p "$BORDER_TYPE_NAME" &>/dev/null; then BORDER_TYPE_NAME="LIGHT"; fi
-   local -n BORDER_TYPE_REF=$BORDER_TYPE_NAME
-   local -n BORDER_TYPE=${!BORDER_TYPE_REF}
-   local BORDER_COLOR_NAME=${settings["MENU_BORDER_COLOR"]:-"FG_DEFAULT"}
-   local BORDER_COLOR=${ANSI[$BORDER_COLOR_NAME]}
-
-   local -n menu_items=menu                     # Use nameref for the menu array
-   local menu_length=$((${#menu_items[@]} / 2)) # Each tuple has 2 elements
-
-   # Scroll
-   local max_rows=$(tput lines)
-   max_options=$((max_rows - 6))
-   top_option=0
-   previous_top_option=0
-
-   # Set the selection indexes
-   selected_index=0
-   previous_index=0
-
-   # Clear the screen
-   clear
-
-   # Hide the cursor
-   tput civis
-
-   # Find the maximum content width (menu options or header)
-   content_width=0
-   for ((i = 0; i < menu_length; i++)); do
-      local task_display_name="${menu_items[i * 2]}"
-      local task_display_name_length=$(slen "$task_display_name")
-      if [ "$task_display_name_length" -gt "$content_width" ]; then
-         content_width=$task_display_name_length
-      fi
-   done
-   local header_length=$(slen "$menu_header")
-   if [ "$header_length" -gt "$content_width" ]; then
-      content_width=${#menu_header}
-   fi
-
-   # Setup
-   menu_width=$((content_width + 2 + (${#menu_tab} * 2)))
-   empty_line="${BORDER_COLOR}$(padc "${BORDER_TYPE[1010]}" "${BORDER_TYPE[1010]}" "$menu_width")${FG_DEFAULT}"
-
-   # Display the menu top border
-   echo -e "${BORDER_COLOR}$(padc "${BORDER_TYPE[0110]}" "${BORDER_TYPE[0011]}" "$menu_width" "${BORDER_TYPE[0101]}")${FG_DEFAULT}"
-
-   # Display the menu header
-   echo -e "${BORDER_COLOR}${BORDER_TYPE[1010]}${FG_DEFAULT}${menu_tab}$(pads "$menu_header" "$content_width")${menu_tab}${BORDER_COLOR}${BORDER_TYPE[1010]}${FG_DEFAULT}"
-
-   # Display the menu middle border
-   echo -e "${BORDER_COLOR}$(padc "${BORDER_TYPE[1110]}" "${BORDER_TYPE[1011]}" "$menu_width" "${BORDER_TYPE[0101]}")${FG_DEFAULT}"
-
-   # Display an empty line
-   echo -e "$empty_line"
-
-   # Display the menu items
-   local start_index=$top_option
-   local end_index=$((top_option + max_options - 1))
-   for ((i = start_index; i <= end_index; i++)); do
-      local task_display_name="${menu_items[(i * 2)]}"
-      echo -e "${BORDER_COLOR}${BORDER_TYPE[1010]}${FG_DEFAULT}${menu_tab}$(padr "$task_display_name" "$content_width")${menu_tab}${BORDER_COLOR}${BORDER_TYPE[1010]}${FG_DEFAULT}"
-   done
-
-   # Display an empty line
-   echo -e "$empty_line"
-
-   # Display the menu bottom border
-   echo -e -n "${BORDER_COLOR}$(padc "${BORDER_TYPE[1100]}" "${BORDER_TYPE[1001]}" "$menu_width" "${BORDER_TYPE[0101]}")${FG_DEFAULT}"
+menu_clear() {
+   menu_header="${1:-Menu}"
+   menu_labels=()
+   menu_callbacks=()
+   menu_argument_counts=()
+   menu_arguments=()
 }
 
-# Navigate the menu by redrawing specific parts
+# Add an item as a label, callback, and zero or more lossless callback arguments.
+menu_add() {
+   local label="${1-}"
+   local callback="${2-}"
+   shift 2 || return 2
+
+   if [[ ! "$callback" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      printf 'Invalid menu callback: %s\n' "$callback" >&2
+      return 2
+   fi
+
+   local -i item_index=${#menu_labels[@]}
+   local -i argument_index=0
+   local argument
+
+   menu_labels[item_index]="$label"
+   menu_callbacks[item_index]="$callback"
+   menu_argument_counts[item_index]=$#
+   for argument in "$@"; do
+      menu_arguments["$item_index:$argument_index"]="$argument"
+      argument_index=$((argument_index + 1))
+   done
+}
+
+menu_invoke() {
+   local -i item_index="$1"
+   local callback="${menu_callbacks[item_index]-}"
+   local -a arguments=()
+   local -i argument_count=${menu_argument_counts[item_index]:-0}
+   local -i argument_index
+
+   if [[ -z "$callback" ]] || ! declare -F "$callback" >/dev/null; then
+      printf 'Menu callback is not defined: %s\n' "$callback" >&2
+      return 1
+   fi
+
+   for ((argument_index = 0; argument_index < argument_count; argument_index++)); do
+      arguments+=("${menu_arguments["$item_index:$argument_index"]}")
+   done
+
+   "$callback" "${arguments[@]}"
+}
+
+menu_resolve_color() {
+   local name="${1^^}"
+   printf '%s' "${ANSI[$name]:-$FG_DEFAULT}"
+}
+
+menu_border_char() {
+   local key="$1"
+   case "${settings[MENU_BORDER_TYPE]^^}" in
+   HEAVY) printf '%s' "${MENU_BORDER_HEAVY[$key]}" ;;
+   *) printf '%s' "${MENU_BORDER_LIGHT[$key]}" ;;
+   esac
+}
+
+menu_terminal_rows() {
+   local rows="${MENU_HEIGHT-}"
+
+   if [[ "$rows" =~ ^[0-9]+$ ]] && ((rows > 0)); then
+      printf '%d' "$rows"
+      return
+   fi
+
+   rows=$(tput lines 2>/dev/null) || rows=24
+   [[ "$rows" =~ ^[0-9]+$ ]] || rows=24
+   printf '%d' "$rows"
+}
+
+menu_prepare_layout() {
+   local -i item_index
+   local -i item_length
+   local -i rows
+   local -i header_length
+
+   rows=$(menu_terminal_rows)
+   max_options=$((rows - 6))
+   ((max_options < 1)) && max_options=1
+
+   content_width=0
+   for ((item_index = 0; item_index < ${#menu_labels[@]}; item_index++)); do
+      item_length=$(slen "${menu_labels[item_index]}")
+      ((item_length > content_width)) && content_width=$item_length
+   done
+
+   header_length=$(slen "$menu_header")
+   ((header_length > content_width)) && content_width=$header_length
+   menu_width=$((content_width + 2 + (${#menu_tab} * 2)))
+   opt_left=$((1 + ${#menu_tab}))
+}
+
+# Render the full menu without changing terminal state.
+menu_render() {
+   menu_prepare_layout
+
+   local border_color
+   local vertical horizontal top_left top_right middle_left middle_right bottom_left bottom_right
+   local empty_line label
+   local -i item_index
+   local -i end_index=$((top_option + max_options - 1))
+
+   border_color=$(menu_resolve_color "${settings[MENU_BORDER_COLOR]:-FG_DEFAULT}")
+   vertical=$(menu_border_char 1010)
+   horizontal=$(menu_border_char 0101)
+   top_left=$(menu_border_char 0110)
+   top_right=$(menu_border_char 0011)
+   middle_left=$(menu_border_char 1110)
+   middle_right=$(menu_border_char 1011)
+   bottom_left=$(menu_border_char 1100)
+   bottom_right=$(menu_border_char 1001)
+   empty_line="${border_color}$(pad_center "$vertical" "$vertical" "$menu_width")${FG_DEFAULT}"
+
+   printf '%s\n' "${border_color}$(pad_center "$top_left" "$top_right" "$menu_width" "$horizontal")${FG_DEFAULT}"
+   printf '%s\n' "${border_color}${vertical}${FG_DEFAULT}${menu_tab}$(pad_sides "$menu_header" "$content_width")${menu_tab}${border_color}${vertical}${FG_DEFAULT}"
+   printf '%s\n' "${border_color}$(pad_center "$middle_left" "$middle_right" "$menu_width" "$horizontal")${FG_DEFAULT}"
+   printf '%s\n' "$empty_line"
+
+   for ((item_index = top_option; item_index <= end_index; item_index++)); do
+      label="${menu_labels[item_index]-}"
+      printf '%s\n' "${border_color}${vertical}${FG_DEFAULT}${menu_tab}$(pad_right "$label" "$content_width")${menu_tab}${border_color}${vertical}${FG_DEFAULT}"
+   done
+
+   printf '%s\n' "$empty_line"
+   printf '%s' "${border_color}$(pad_center "$bottom_left" "$bottom_right" "$menu_width" "$horizontal")${FG_DEFAULT}"
+}
+
+menu_build() {
+   selected_index=0
+   previous_index=0
+   top_option=0
+   previous_top_option=0
+   menu_prepare_layout
+
+   if [[ -t 1 ]]; then
+      clear
+      tput civis 2>/dev/null || true
+   fi
+   menu_active=1
+   menu_render
+}
+
+menu_draw_option() {
+   local -i item_index="$1"
+   local -i visual_index=$((item_index - top_option))
+   local label="${menu_labels[item_index]}"
+   local pointer_color pointer
+
+   pointer_color=$(menu_resolve_color "${settings[MENU_POINTER_COLOR]:-FG_DEFAULT}")
+   pointer="${settings[MENU_POINTER_TYPE]:->}"
+
+   if ((item_index == selected_index)); then
+      tput cup $((opt_top + visual_index)) $((opt_left - 2))
+      printf '%s' "${pointer_color}${pointer}${FG_DEFAULT} $(pad_right "${INVERSE}${label}${INVERSE_OFF}" "$content_width")"
+   else
+      tput cup $((opt_top + visual_index)) $((opt_left - 2))
+      printf ' '
+      tput cup $((opt_top + visual_index)) "$opt_left"
+      printf '%s' "$(pad_right "$label" "$content_width")"
+   fi
+}
+
+menu_redraw_changed_options() {
+   local -i start_index end_index item_index
+   local -i item_count=${#menu_labels[@]}
+
+   ((item_count == 0)) && return
+   if ((top_option != previous_top_option)); then
+      start_index=$top_option
+      end_index=$((top_option + max_options - 1))
+   else
+      start_index=$((selected_index < previous_index ? selected_index : previous_index))
+      end_index=$((selected_index > previous_index ? selected_index : previous_index))
+   fi
+   ((end_index >= item_count)) && end_index=$((item_count - 1))
+
+   for ((item_index = start_index; item_index <= end_index; item_index++)); do
+      menu_draw_option "$item_index"
+   done
+}
+
+menu_move_up() {
+   local -i item_count=${#menu_labels[@]}
+   ((item_count == 0)) && return
+
+   previous_index=$selected_index
+   previous_top_option=$top_option
+   ((selected_index--))
+   if ((selected_index < 0)); then
+      selected_index=$((item_count - 1))
+      top_option=$((item_count > max_options ? item_count - max_options : 0))
+   elif ((selected_index < top_option)); then
+      ((top_option--))
+   fi
+}
+
+menu_move_down() {
+   local -i item_count=${#menu_labels[@]}
+   ((item_count == 0)) && return
+
+   previous_index=$selected_index
+   previous_top_option=$top_option
+   ((selected_index++))
+   if ((selected_index >= item_count)); then
+      selected_index=0
+      top_option=0
+   elif ((selected_index >= top_option + max_options)); then
+      ((top_option++))
+   fi
+}
+
+menu_restore_input() {
+   if [[ -n "$menu_stty_state" && -t 0 ]]; then
+      stty "$menu_stty_state" 2>/dev/null || true
+   fi
+   [[ -t 1 ]] && tput cnorm 2>/dev/null || true
+}
+
+menu_terminal_cleanup() {
+   local status=$?
+   menu_restore_input
+   printf '%s' "$RESET"
+   if ((menu_active)) && [[ -t 1 ]]; then
+      clear
+   fi
+   menu_active=0
+   trap - EXIT INT TERM HUP
+   return "$status"
+}
+
 menu_navigate() {
-   # ANSI settings
-   local POINTER_COLOR_NAME=${settings["MENU_POINTER_COLOR"]:-"FG_DEFAULT"} # TODO: Move to top level
-   local POINTER_COLOR=${ANSI[$POINTER_COLOR_NAME]}                         # TODO: Move to top level
-   local POINTER_TYPE=${settings["MENU_POINTER_TYPE"]:-">"}                 # TODO: Move to top level
+   local key sequence
 
-   # Restore the cursor visibility and reset the terminal in case of exit
-   trap 'stty icanon echo; tput cnorm; clear; exit 0' EXIT
+   if [[ ! -t 0 || ! -t 1 ]]; then
+      printf 'Interactive menu navigation requires a terminal.\n' >&2
+      return 1
+   fi
+   if ((${#menu_labels[@]} == 0)); then
+      printf 'Cannot navigate an empty menu.\n' >&2
+      return 1
+   fi
 
-   # Set terminal to non-canonical mode (raw input)
-   stty -icanon -echo
+   menu_stty_state=$(stty -g) || return 1
+   trap menu_terminal_cleanup EXIT
+   trap 'exit 130' INT
+   trap 'exit 143' TERM HUP
+   stty -icanon -echo min 1 time 0
 
    while true; do
-      local -n menu_items=menu
-      local -i menu_length=$((${#menu_items[@]} / 2)) # Each tuple has 2 elements
+      menu_redraw_changed_options
+      IFS= read -rsn1 key || break
 
-      local -i start_index
-      local -i end_index
-      # If the range of visible options has changed, redraw all the options
-      if [ "$top_option" -ne "$previous_top_option" ]; then
-         # Redraw all the options
-         start_index=$top_option
-         end_index=$((top_option + max_options - 1))
-      else
-         # Redraw only the unselected and selected options
-         start_index=$((selected_index < previous_index ? selected_index : previous_index))
-         end_index=$((selected_index > previous_index ? selected_index : previous_index))
-      fi
-
-      # Adjust the range of visible options in case no scrolling is needed
-      if [ "$end_index" -ge "$menu_length" ]; then
-         end_index=$((menu_length - 1))
-      fi
-
-      # Redraw the applicatble menu items
-      for ((i = start_index; i <= end_index; i++)); do
-         local task_display_name="${menu_items[(i * 2)]}"
-         local visual_i=$((i - top_option))
-
-         if [ "$i" -ne $selected_index ]; then
-            # Redraw the unselected option's line
-            tput cup $((opt_top + visual_i)) $((opt_left - 2))
-            echo -n " "
-            tput cup $((opt_top + visual_i)) $opt_left
-            echo -e "$(padr "$task_display_name" "$content_width")"
-         else
-            # Redraw the selected option's line
-            tput cup $((opt_top + visual_i)) $((opt_left - 2))
-            echo -e "${POINTER_COLOR}${POINTER_TYPE}${FG_DEFAULT} $(padr "${INVERSE}$task_display_name${INVERSE_OFF}" "$content_width")"
-         fi
-      done
-
-      # Read user input
-      read -rsn1 key
       case "$key" in
-      # Escape sequence
-      $'\x1b')
-         read -rsn2 key
-         case "$key" in
-         # Up arrow key
-         "[A")
-            # Store the previous index
-            previous_index="$selected_index"
-            # Store the previous top option
-            previous_top_option="$top_option"
-            # Update the selected index
-            ((selected_index--))
-            # Update the top option
-            if [ "$selected_index" -lt "$top_option" ]; then
-               ((top_option--))
-            fi
-            # Wrap around
-            if [ "$selected_index" -lt 0 ]; then
-               selected_index=$((menu_length - 1))
-               top_option=$((menu_length - max_options < 0 ? 0 : menu_length - max_options))
-            fi
-            ;;
-         # Down arrow key
-         "[B")
-            # Store the previous index and update the selected index
-            previous_index="$selected_index"
-            # Store the previous top option
-            previous_top_option="$top_option"
-            # Update the selected index
-            ((selected_index++))
-            # Update the top option
-            local bottom_option=$((top_option + max_options - 1))
-            if [ "$selected_index" -gt "$bottom_option" ]; then
-               ((top_option++))
-            fi
-            # Wrap around
-            if [ "$selected_index" -ge "$menu_length" ]; then
-               selected_index=0
-               top_option=0
-            fi
-            ;;
+      $'\033')
+         sequence=""
+         IFS= read -rsn2 -t 0.1 sequence || true
+         case "$sequence" in
+         "[A") menu_move_up ;;
+         "[B") menu_move_down ;;
          esac
          ;;
-      # Enter key
       "")
-         # Restore terminal to normal mode before executing the task
-         stty icanon echo
-         tput cnorm
-
-         # Call the associated function
-         local task_function="${menu_items[(selected_index * 2) + 1]}" # Function name
-         $task_function
-
-         # Redraw the menu
+         menu_restore_input
+         menu_invoke "$selected_index"
          menu_build
-
-         # Set terminal to non-canonical mode (raw input)
-         stty -icanon -echo
-         tput civis
-         continue
+         stty -icanon -echo min 1 time 0
          ;;
       esac
    done
 
-   # Restore the cursor visibility
-   tput cnorm
-
-   # Restore terminal to normal mode
-   stty icanon echo
+   menu_terminal_cleanup
 }
 
-# Build and navigate the menu
 menu_start() {
    menu_build
    menu_navigate

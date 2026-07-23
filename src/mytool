@@ -1,401 +1,326 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# ===== Sources ===================================================================================
+app_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=lib/ansi.sh
+source "$app_dir/lib/ansi.sh"
+# shellcheck source=lib/settings.sh
+source "$app_dir/lib/settings.sh"
+# shellcheck source=lib/menu.sh
+source "$app_dir/lib/menu.sh"
+# shellcheck source=core/reverse_proxy.sh
+source "$app_dir/core/reverse_proxy.sh"
+unset app_dir
 
-script_dir=$(dirname "${BASH_SOURCE[0]}")
-source "$script_dir/lib/ansi.sh"
-source "$script_dir/lib/settings.sh"
-source "$script_dir/lib/menu.sh"
-
-# ===== Utils =====================================================================================
-
-# Function to wait for a key press
 wait_for_key() {
-   echo
-   echo -e "${DIM}Press any key to continue...${RESET}"
-   read -sn1
+   printf '\n%sPress any key to continue...%s' "$DIM" "$RESET"
+   IFS= read -rsn1
+   printf '\n'
 }
 
-# Display the information of a specific settings key
-settings_display_key_info() {
-   local key=$1
-   local value=${settings[$key]}
-   local default_value=${default_settings[$key]}
+prompt_confirm() {
+   local prompt="$1"
+   local reply
 
-   echo -e "Key: ${key}"
-   echo -e "Current value: ${value}"
-   echo -e "Default value: ${default_value}"
+   IFS= read -r -n1 -p "$prompt" reply
+   printf '\n'
+   [[ "$reply" =~ ^[Yy]$ ]]
 }
 
-# ===== Reverse Proxy Manager =====================================================================
+print_success() {
+   printf '%s%s%s\n' "$GREEN" "$1" "$RESET"
+}
 
-declare -A domains_and_ports
+print_error() {
+   printf '%s%s%s\n' "$RED" "$1" "$RESET" >&2
+}
 
-# Utility function to load domains and ports into an associative array
-reverse_proxy_load_configs() {
-   # Check if the Nginx config directory exists
-   if [ ! -d "${settings["NGINX_CONFIG_DIR"]}" ]; then
-      echo -e "${RED}Nginx configuration directory does not exist!${RESET}"
-      return
-   fi
+task_exit() {
+   exit 0
+}
 
-   # Loop through each .conf file in the Nginx config directory
-   for config_file in "${settings["NGINX_CONFIG_DIR"]}"/*.conf; do
-      if [ -f "$config_file" ]; then
-         # Extract domain and port using grep and awk or sed (assuming proxy_pass is set)
-         domain=$(grep -oP 'server_name\s+\K[^\s;]+' "$config_file")                          # Extract the domain
-         port=$(grep -oP 'proxy_pass\s+http://(127.0.0.1|localhost):\K[0-9]+' "$config_file") # Extract the port number
+settings_validate_value() {
+   local key="$1"
+   local value="$2"
+   local normalized
 
-         # Check if both domain and port are valid
-         if [[ -n "$domain" && -n "$port" ]]; then
-            domains_and_ports["$domain"]="$port" # Store in the array
-            echo -e "${GREEN}Loaded reverse proxy configuration: ${WHITE}${domain} -> ${DIM}localhost:${port}${RESET}"
-         else
-            echo -e "${RED}Invalid configuration file: $config_file${RESET}"
-         fi
+   [[ "$value" != *$'\n'* && "$value" != *$'\r'* && "$value" != *$'\033'* ]] || return 1
+
+   case "$key" in
+   NGINX_CONFIG_DIR)
+      [[ -n "$value" && "$value" == /* ]]
+      ;;
+   MENU_BORDER_TYPE)
+      normalized=${value^^}
+      [[ "$normalized" == LIGHT || "$normalized" == HEAVY ]]
+      ;;
+   MENU_BORDER_COLOR | MENU_POINTER_COLOR)
+      normalized=${value^^}
+      [[ -n "${ANSI[$normalized]+set}" ]]
+      ;;
+   MENU_POINTER_TYPE)
+      [[ $(slen "$value") -eq 1 ]]
+      ;;
+   *)
+      return 1
+      ;;
+   esac
+}
+
+settings_sanitize() {
+   local key
+
+   for key in "${!default_settings[@]}"; do
+      if ! settings_validate_value "$key" "${settings[$key]-}"; then
+         printf 'Invalid value for %s; using its default.\n' "$key" >&2
+         settings["$key"]="${default_settings[$key]}"
       fi
    done
 }
 
-# Function to save a reverse proxy configuration to its own Nginx configuration file
-reverse_proxy_save_config() {
-   local domain=$1
-   local port=$2
-   local config_file="${settings["NGINX_CONFIG_DIR"]}/${domain}.conf"
+settings_display_key_info() {
+   local key="$1"
 
-   # If the file does not exist, create it
-   if [ ! -f "$config_file" ]; then
-      touch "$config_file"
-   fi
-
-   # Write the Nginx configuration to the file
-   echo "server {" >"$config_file"
-   echo "    listen 80;" >>"$config_file"
-   echo "    server_name $domain;" >>"$config_file"
-   echo "" >>"$config_file"
-   echo "    location / {" >>"$config_file"
-   echo "        proxy_pass http://localhost:$port;" >>"$config_file"
-   echo "        proxy_set_header Host \$host;" >>"$config_file"
-   echo "        proxy_set_header X-Real-IP \$remote_addr;" >>"$config_file"
-   echo "        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;" >>"$config_file"
-   echo "        proxy_set_header X-Forwarded-Proto \$scheme;" >>"$config_file"
-   echo "    }" >>"$config_file"
-   echo "}" >>"$config_file"
+   printf 'Key: %s\n' "$key"
+   printf 'Current value: %s\n' "${settings[$key]}"
+   printf 'Default value: %s\n' "${default_settings[$key]}"
 }
 
-# ===== Tasks =====================================================================================
-
-# Add a new reverse proxy configuration
 task_add_reverse_proxy() {
+   local domain port
+
    clear
+   printf '%sAdd a new reverse proxy configuration%s\n\n' "$DIM" "$RESET"
+   IFS= read -r -p 'Enter domain: ' domain
 
-   echo -e "${DIM}Add a new reverse proxy configuration${RESET}"
-
-   # Ask for domain
-   echo
-   read -p "Enter domain: " domain
-
-   # Check if the domain already exists
-   if [ -n "${domains_and_ports[$domain]}" ]; then
-      echo
-      echo -e "${RED}Domain already exists.${RESET}"
+   if ! reverse_proxy_validate_domain "$domain"; then
+      print_error "Invalid domain: $domain"
+      wait_for_key
+      return
+   fi
+   if [[ -n "${domains_and_ports[$domain]+set}" ]]; then
+      print_error 'Domain already exists.'
       wait_for_key
       return
    fi
 
-   # Ask for port
-   read -p "Enter port: " port
-
-   # Validate the port number
-   if ! [[ "$port" =~ ^[0-9]+$ ]] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
-      echo -e "${RED}Invalid port: ${port}. Please enter a port number between 1 and 65535.${RESET}"
+   IFS= read -r -p 'Enter port: ' port
+   if ! reverse_proxy_validate_port "$port"; then
+      print_error "Invalid port: $port. Enter a number between 1 and 65535."
       wait_for_key
       return
    fi
-   echo
 
-   # Save the reverse proxy configuration
-   echo -e "${DIM}Saving reverse proxy configuration...${RESET}"
-   reverse_proxy_save_config "$domain" "$port"
+   printf '\n%sSaving configuration and reloading Nginx...%s\n' "$DIM" "$RESET"
+   if ! reverse_proxy_apply_config "$domain" "$port"; then
+      print_error 'The configuration was not applied; the previous Nginx state was restored.'
+      wait_for_key
+      return
+   fi
 
-   # Reload Nginx
-   echo -e "${DIM}Reloading Nginx...${RESET}"
-   systemctl reload nginx
-
-   # Reload the reverse proxy configurations
-   echo -e "${DIM}Reloading reverse proxy configurations...${RESET}"
-   reverse_proxy_load_configs &>/dev/null
-
-   # Rebuild the menu
-   echo -e "${DIM}Updating menu...${RESET}"
-   build_menu_reverse_proxy ""
-
-   echo
-   echo -e "${GREEN}Reverse proxy configuration added.${RESET}"
-
+   build_menu_reverse_proxy
+   printf '\n'
+   print_success 'Reverse proxy configuration added.'
    wait_for_key
 }
 
 task_modify_reverse_proxy() {
-   local domain=$1
-   local port=${domains_and_ports[$domain]}
+   local domain="$1"
+   local port="${domains_and_ports[$domain]}"
+   local new_port
 
    clear
-
-   echo -e "${DIM}Modify reverse proxy configuration for ${domain}${RESET}"
-
-   # Ask for new port
-   echo
-   read -p "Enter port [${port}]: " new_port
+   printf '%sModify reverse proxy configuration for %s%s\n\n' "$DIM" "$domain" "$RESET"
+   IFS= read -r -p "Enter port [$port]: " new_port
    new_port=${new_port:-$port}
 
-   # Validate the port number
-   if ! [[ "$new_port" =~ ^[0-9]+$ ]] || [ "$new_port" -lt 1 ] || [ "$new_port" -gt 65535 ]; then
-      echo -e "${RED}Invalid port: ${new_port}. Please enter a port number between 1 and 65535.${RESET}"
+   if ! reverse_proxy_validate_port "$new_port"; then
+      print_error "Invalid port: $new_port. Enter a number between 1 and 65535."
       wait_for_key
       return
    fi
-   echo
-
-   # Check if the new port is the same as the old port
-   if [ "$new_port" -eq "$port" ]; then
-      echo -e "${RED}The new port is the same as the old port.${RESET}"
+   if [[ "$new_port" == "$port" ]]; then
+      print_error 'The new port is the same as the current port.'
       wait_for_key
       return
    fi
 
-   # Save the reverse proxy configuration
-   echo -e "${DIM}Saving reverse proxy configuration...${RESET}"
-   reverse_proxy_save_config "$domain" "$new_port"
+   printf '\n%sSaving configuration and reloading Nginx...%s\n' "$DIM" "$RESET"
+   if ! reverse_proxy_apply_config "$domain" "$new_port"; then
+      print_error 'The configuration was not applied; the previous Nginx state was restored.'
+      wait_for_key
+      return
+   fi
 
-   # Reload Nginx
-   echo -e "${DIM}Reloading Nginx...${RESET}"
-   systemctl reload nginx
-
-   # Reload the reverse proxy configurations
-   echo -e "${DIM}Reloading reverse proxy configurations...${RESET}"
-   reverse_proxy_load_configs &>/dev/null
-
-   # Rebuild the menu
-   echo -e "${DIM}Updating menu...${RESET}"
-   build_menu_reverse_proxy ""
-
-   echo
-   echo -e "${GREEN}Reverse proxy configuration updated.${RESET}"
-
+   build_menu_reverse_proxy "$domain"
+   printf '\n'
+   print_success 'Reverse proxy configuration updated.'
    wait_for_key
 }
 
 task_delete_reverse_proxy() {
-   local domain=$1
-   local port=${domains_and_ports[$domain]}
+   local domain="$1"
 
    clear
-
-   echo -e "${DIM}Delete reverse proxy configuration for ${domain}${RESET}"
-
-   # Ask for confirmation
-   echo
-   read -p "Are you sure you want to delete the reverse proxy configuration? [y/N] " -n 1
-   echo
-
-   echo
-   if [[ $REPLY =~ ^[Yy]$ ]]; then
-      # Delete the Nginx configuration file
-      echo -e "${DIM}Deleting Nginx configuration file...${RESET}"
-      rm -f "${settings["NGINX_CONFIG_DIR"]}/${domain}.conf"
-
-      # Reload Nginx
-      echo -e "${DIM}Reloading Nginx...${RESET}"
-      systemctl reload nginx
-
-      # Reload the reverse proxy configurations
-      echo -e "${DIM}Reloading reverse proxy configurations...${RESET}"
-      reverse_proxy_load_configs &>/dev/null
-
-      # TODO: Remove from cache
-
-      # Rebuild the menu
-      echo -e "${DIM}Updating menu...${RESET}"
-      build_menu_reverse_proxy ""
-
-      echo
-      echo -e "${GREEN}Reverse proxy configuration deleted.${RESET}"
-   else
-      echo -e "${RED}Operation canceled.${RESET}"
-      # Play a beep sound
-      echo -e -n "$BEEP"
-   fi
-
-   wait_for_key
-}
-
-# Display the information of a specific settings key
-task_inspect_settings_key() {
-   local key=$1
-   local value=${settings[$key]}
-   local default_value=${default_settings[$key]}
-
-   clear
-
-   # Display key information
-   settings_display_key_info "$key"
-
-   wait_for_key
-}
-
-# Modify a specific settings key
-task_modify_settings_key() {
-   local key=$1
-   local value=${settings[$key]}
-
-   clear
-
-   # Display key information
-   echo -e -n "$DIM"
-   settings_display_key_info "$key"
-   echo -e -n "$RESET"
-
-   # Ask for new value
-   echo
-   read -p "Enter new value: " new_value
-
-   # Ask for confirmation
-   echo
-   echo -e "Current value: ${value}"
-   echo -e "New value: ${new_value}"
-   echo
-   read -p "Are you sure you want to update the setting? [y/N] " -n 1
-
-   echo
-   if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-      echo -e "${RED}Operation canceled.${RESET}"
-      # Play a beep sound
-      echo -e -n "$BEEP"
+   printf '%sDelete reverse proxy configuration for %s%s\n\n' "$DIM" "$domain" "$RESET"
+   if ! prompt_confirm 'Are you sure you want to delete this configuration? [y/N] '; then
+      print_error 'Operation canceled.'
+      printf '%s' "$BEEP"
       wait_for_key
       return
-   else
-      # Update the settings key value
-      settings[$key]=$new_value
-      settings_save_to_file ""
-      echo -e "${GREEN}Setting updated.${RESET}"
    fi
 
+   printf '\n%sDeleting configuration and reloading Nginx...%s\n' "$DIM" "$RESET"
+   if ! reverse_proxy_remove_config "$domain"; then
+      print_error 'The configuration was not deleted; the previous Nginx state was restored.'
+      wait_for_key
+      return
+   fi
+
+   build_menu_reverse_proxy
+   printf '\n'
+   print_success 'Reverse proxy configuration deleted.'
    wait_for_key
 }
 
-# Restore default value of a specific settings key
-task_restore_default_settings_key() {
-   local key=$1
-   local value=${settings[$key]}
-   local default_value=${default_settings[$key]}
+task_inspect_settings_key() {
+   clear
+   settings_display_key_info "$1"
+   wait_for_key
+}
+
+task_modify_settings_key() {
+   local key="$1"
+   local old_value="${settings[$key]}"
+   local new_value
 
    clear
-
-   # Display key information
-   echo -e -n "$DIM"
+   printf '%s' "$DIM"
    settings_display_key_info "$key"
-   echo -e -n "$RESET"
+   printf '%s\n\n' "$RESET"
+   IFS= read -r -p 'Enter new value: ' new_value
 
-   # Ask for confirmation
-   echo
-   read -p "Are you sure you want to restore the default value? [y/N] " -n 1
-
-   echo
-   if [[ $REPLY =~ ^[Yy]$ ]]; then
-      settings[$key]=$default_value
-      settings_save_to_file ""
-      echo -e "${GREEN}Default value restored.${RESET}"
-   else
-      echo -e "${RED}Operation canceled.${RESET}"
-      # Play a beep sound
-      echo -e -n "$BEEP"
+   if ! settings_validate_value "$key" "$new_value"; then
+      print_error "Invalid value for $key."
+      wait_for_key
+      return
    fi
 
+   printf '\nCurrent value: %s\nNew value: %s\n\n' "$old_value" "$new_value"
+   if ! prompt_confirm 'Are you sure you want to update the setting? [y/N] '; then
+      print_error 'Operation canceled.'
+      printf '%s' "$BEEP"
+      wait_for_key
+      return
+   fi
+
+   settings["$key"]="$new_value"
+   if ! settings_save_to_file; then
+      settings["$key"]="$old_value"
+      print_error 'Could not save settings; the value was not changed.'
+      wait_for_key
+      return
+   fi
+
+   build_menu_settings "$key"
+   print_success 'Setting updated.'
    wait_for_key
 }
 
-# ===== Menu Builders =============================================================================
+task_restore_default_settings_key() {
+   local key="$1"
+   local old_value="${settings[$key]}"
 
-# Display the main menu
+   clear
+   printf '%s' "$DIM"
+   settings_display_key_info "$key"
+   printf '%s\n\n' "$RESET"
+
+   if ! prompt_confirm 'Are you sure you want to restore the default value? [y/N] '; then
+      print_error 'Operation canceled.'
+      printf '%s' "$BEEP"
+      wait_for_key
+      return
+   fi
+
+   settings["$key"]="${default_settings[$key]}"
+   if ! settings_save_to_file; then
+      settings["$key"]="$old_value"
+      print_error 'Could not save settings; the value was not changed.'
+      wait_for_key
+      return
+   fi
+
+   build_menu_settings "$key"
+   print_success 'Default value restored.'
+   wait_for_key
+}
+
 build_menu_main() {
-   menu_header="Main Menu"
-   menu=(
-      "${RED}Exit${RESET}" "exit 0"
-      "Tools" "build_menu_tools"
-      "${DIM}Edit settings${RESET}" "build_menu_settings"
-   )
+   menu_clear 'Main Menu'
+   menu_add "${RED}Exit${RESET}" task_exit
+   menu_add 'Tools' build_menu_tools
+   menu_add "${DIM}Edit settings${RESET}" build_menu_settings
 }
 
-# Display the tools menu
 build_menu_tools() {
-   menu_header="Tools"
-   menu=(
-      "${RED}Back${RESET}" "build_menu_main"
-      "${BLUE}RPM${INVERSE_OFF} ${DIM}(Reverse Proxy Manager)${RESET}" "build_menu_reverse_proxy"
-   )
+   menu_clear 'Tools'
+   menu_add "${RED}Back${RESET}" build_menu_main
+   menu_add "${BLUE}RPM${RESET} ${DIM}(Reverse Proxy Manager)${RESET}" build_menu_reverse_proxy
 }
 
-# Display the settings menu
 build_menu_settings() {
-   # If has argument, build menu for specific setting
-   if [ -n "$1" ]; then
-      menu_header="Edit Setting"
-      menu=(
-         "${RED}Back${RESET}" "build_menu_settings"
-         "${CYAN}Inspect${RESET}" "task_inspect_settings_key $1"
-         "${YELLOW}Modify${RESET}" "task_modify_settings_key $1"
-         "${RED}Restore default${RESET}" "task_restore_default_settings_key $1"
-      )
+   local selected_key="${1-}"
+   local key
+   local -a keys=()
+
+   if [[ -n "$selected_key" ]]; then
+      menu_clear 'Edit Setting'
+      menu_add "${RED}Back${RESET}" build_menu_settings
+      menu_add "${CYAN}Inspect${RESET}" task_inspect_settings_key "$selected_key"
+      menu_add "${YELLOW}Modify${RESET}" task_modify_settings_key "$selected_key"
+      menu_add "${RED}Restore default${RESET}" task_restore_default_settings_key "$selected_key"
       return
-   else
-      # Otherwise, build menu for all settings
-      menu_header="Settings"
-      menu=(
-         "${RED}Back${RESET}" "build_menu_main"
-      )
-      # Add settings to the menu
-      for key in "${!settings[@]}"; do
-         menu+=("${key}${INVERSE_OFF} ${DIM}(current: ${settings[$key]})${RESET}" "build_menu_settings $key")
-      done
    fi
+
+   menu_clear 'Settings'
+   menu_add "${RED}Back${RESET}" build_menu_main
+   mapfile -t keys < <(printf '%s\n' "${!default_settings[@]}" | LC_ALL=C sort)
+   for key in "${keys[@]}"; do
+      menu_add "${key} ${DIM}(current: ${settings[$key]})${RESET}" build_menu_settings "$key"
+   done
 }
 
-# Display the reverse proxy menu
 build_menu_reverse_proxy() {
-   # If has second argument, build menu for specific reverse proxy
-   if [ -n "$1" ]; then
-      menu_header="Edit Reverse Proxy"
-      menu=(
-         "${RED}Back${RESET}" "build_menu_reverse_proxy"
-         "${YELLOW}Modify${RESET}" "task_modify_reverse_proxy $1"
-         "${RED}Delete${RESET}" "task_delete_reverse_proxy $1"
-      )
+   local selected_domain="${1-}"
+   local domain
+   local -a domains=()
+
+   if [[ -n "$selected_domain" ]]; then
+      menu_clear 'Edit Reverse Proxy'
+      menu_add "${RED}Back${RESET}" build_menu_reverse_proxy
+      menu_add "${YELLOW}Modify${RESET}" task_modify_reverse_proxy "$selected_domain"
+      menu_add "${RED}Delete${RESET}" task_delete_reverse_proxy "$selected_domain"
       return
-   else
-      # Otherwise, build menu for all reverse proxies
-      menu_header="Reverse Proxy Manager"
-      menu=(
-         "${RED}Back${RESET}" "build_menu_main"
-         "${GREEN}Add new reverse proxy${RESET}" "task_add_reverse_proxy"
-      )
-
-      # Load reverse proxy configurations
-      reverse_proxy_load_configs &>/dev/null
-
-      # Add reverse proxy configurations to the menu
-      for domain in "${!domains_and_ports[@]}"; do
-         menu+=("${domain} ${INVERSE_OFF}${DIM}(port: ${domains_and_ports[$domain]})${RESET}" "build_menu_reverse_proxy $domain")
-      done
    fi
+
+   reverse_proxy_load_configs &>/dev/null || true
+   menu_clear 'Reverse Proxy Manager'
+   menu_add "${RED}Back${RESET}" build_menu_main
+   menu_add "${GREEN}Add new reverse proxy${RESET}" task_add_reverse_proxy
+
+   mapfile -t domains < <(printf '%s\n' "${!domains_and_ports[@]}" | LC_ALL=C sort)
+   for domain in "${domains[@]}"; do
+      menu_add "${domain} ${DIM}(port: ${domains_and_ports[$domain]})${RESET}" build_menu_reverse_proxy "$domain"
+   done
 }
 
-# ===== Main ======================================================================================
+main() {
+   settings_load_from_file || true
+   settings_sanitize
+   build_menu_main
+   menu_start
+}
 
-settings_load_from_file ""
-
-# Build the main menu
-build_menu_main
-
-# Run the menu
-menu_start
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+   main "$@"
+fi

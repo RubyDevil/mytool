@@ -1,41 +1,20 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-script_dir=$(dirname "${BASH_SOURCE[0]}")
-source "$script_dir/../lib/test.sh"
-source "$script_dir/../lib/pad.sh"
+test_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=../lib/test.sh
+source "$test_dir/../lib/test.sh"
+# shellcheck source=../lib/pad.sh
+source "$test_dir/../lib/pad.sh"
+unset test_dir
 
-# Test the pad_right function
-test_print_name "Pad string to the right" # Print the test name
-output=$(pad_right "foo" 25 ".")          # Generate the padding
-expected="foo......................"      # Define the expected output
-test "$output" == "$expected"             # Compare the output with the expected value
-result=$?                                 # Store the result of the test
-test_print_result "$result"               # Print the test result
-if [ "$result" -ne 0 ]; then              # Clean up and exit if the test failed
-   exit 1
-fi
+test_assert_equal 'Pad right' 'foo..' "$(pad_right foo 5 .)"
+test_assert_equal 'Pad left' '..foo' "$(pad_left foo 5 .)"
+test_assert_equal 'Pad between strings' 'foo...bar' "$(pad_center foo bar 9 .)"
+test_assert_equal 'Center keeps both strings when full' 'foobar' "$(pad_center foo bar 5 .)"
+test_assert_equal 'Pad both sides with odd remainder' '.foo..' "$(pad_sides foo 6 .)"
+test_assert_equal 'Styled text uses visible width' "${RED}foo${RESET}.." "$(pad_right "${RED}foo${RESET}" 5 .)"
+test_assert_equal 'Unicode fill has width one' 'foo──' "$(pad_right foo 5 '─')"
+test_assert_status 'Reject non-numeric width' 2 pad_right foo nope
+test_assert_status 'Reject multi-character fill' 2 pad_right foo 5 '..'
 
-# Test the pad_left function
-test_print_name "Pad string to the left" # Print the test name
-output=$(pad_left "foo" 25 ".")          # Generate the padding
-expected="......................foo"     # Define the expected output
-test "$output" == "$expected"            # Compare the output with the expected value
-result=$?                                # Store the result of the test
-test_print_result "$result"              # Print the test result
-if [ "$result" -ne 0 ]; then             # Clean up and exit if the test failed
-   exit 1
-fi
-
-# Test the pad_center function
-test_print_name "Pad in between two strings" # Print the test name
-output=$(pad_center "foo" "bar" 25 ".")      # Generate the padding
-expected="foo...................bar"         # Define the expected output
-test "$output" == "$expected"                # Compare the output with the expected value
-result=$?                                    # Store the result of the test
-test_print_result "$result"                  # Print the test result
-if [ "$result" -ne 0 ]; then                 # Clean up and exit if the test failed
-   exit 1
-fi
-
-# Clean up and exit
-exit 0
+test_finish
