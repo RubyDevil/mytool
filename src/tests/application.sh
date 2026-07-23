@@ -15,6 +15,28 @@ test_assert_equal 'Keep main menu hierarchy' 'Tools' "$(strip_ansi "${menu_label
 test_run 'Navigate to tools builder' menu_invoke 1
 test_assert_equal 'Build tools menu header' 'Tools' "$menu_header"
 test_assert_equal 'Keep reverse proxy tool entry' 'RPM (Reverse Proxy Manager)' "$(strip_ansi "${menu_labels[1]}")"
+test_assert_equal 'Add VPS Setup tool entry' 'VPS Setup' "$(strip_ansi "${menu_labels[2]}")"
+
+test_run 'Navigate to VPS Setup builder' menu_invoke 2
+test_assert_equal 'Build VPS Setup menu header' 'VPS Setup' "$menu_header"
+test_assert_equal 'Offer Security Setup' 'Security Setup' "$(strip_ansi "${menu_labels[1]}")"
+test_assert_equal 'Offer Software Management' 'Software Management' "$(strip_ansi "${menu_labels[2]}")"
+
+test_run 'Build security menu' menu_invoke 1
+test_assert_equal 'Build security menu header' 'Security Setup' "$menu_header"
+test_assert_equal 'Enable security multi-select' '1' "$menu_multi_select"
+test_assert_equal 'Keep destructive SSH action red' 'Disable SSH password login' "$(strip_ansi "${menu_labels[4]}")"
+
+build_menu_vps_software
+test_assert_equal 'Build software menu header' 'Software Management' "$menu_header"
+test_assert_equal 'Enable software multi-select' '1' "$menu_multi_select"
+test_assert_equal 'Preselect package updates' '1' "${menu_selected[1]}"
+test_assert_equal 'Keep reinstall option selectable' '1' "${menu_selectable[2]}"
+test_assert_equal 'Preselect Nginx' '1' "${menu_selected[3]}"
+test_assert_equal 'Preselect Node.js' '1' "${menu_selected[5]}"
+test_assert_equal 'Describe NVM' 'Install NVM (Node Version Manager)' "$(strip_ansi "${menu_labels[6]}")"
+test_assert_equal 'Clear before software batch' 'task_vps_software_start' "$menu_selected_start_callback"
+test_assert_equal 'Pause after software batch' 'task_vps_software_complete' "$menu_selected_complete_callback"
 
 build_menu_settings
 test_assert_equal 'Build settings menu items' '6' "${#menu_labels[@]}"
@@ -45,9 +67,11 @@ trap 'rm -rf -- "$temporary_dir"' EXIT
 settings[NGINX_CONFIG_DIR]="$temporary_dir"
 reverse_proxy_save_config z.example 9000
 reverse_proxy_save_config a.example 8000
+domains_and_ports[invalid]=invalid
 build_menu_reverse_proxy
 test_assert_equal 'Build proxy menu items' '4' "${#menu_labels[@]}"
 test_assert_equal 'Sort proxy entries' 'a.example (port: 8000)' "$(strip_ansi "${menu_labels[2]}")"
+test_assert_equal 'Skip invalid proxy cache entry' 'z.example (port: 9000)' "$(strip_ansi "${menu_labels[3]}")"
 
 MENU_HEIGHT=10
 rendered=$(menu_render)

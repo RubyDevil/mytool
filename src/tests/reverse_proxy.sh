@@ -14,6 +14,7 @@ trap 'rm -rf -- "$temporary_dir"' EXIT
 settings[NGINX_CONFIG_DIR]="$temporary_dir"
 
 test_run 'Accept valid domain' reverse_proxy_validate_domain example.com
+test_assert_status 'Reject empty domain' 1 reverse_proxy_validate_domain ''
 test_assert_status 'Reject path traversal domain' 1 reverse_proxy_validate_domain '../example.com'
 test_run 'Accept maximum port' reverse_proxy_validate_port 65535
 test_assert_status 'Reject out-of-range port' 1 reverse_proxy_validate_port 65536
@@ -24,6 +25,11 @@ test_run 'Save reverse proxy config' reverse_proxy_save_config example.com 8080
 test_run 'Write expected upstream' grep -q 'proxy_pass http://localhost:8080;' "$temporary_dir/example.com.conf"
 test_run 'Load reverse proxy configs' reverse_proxy_load_configs
 test_assert_equal 'Parse domain and port' '8080' "${domains_and_ports[example.com]}"
+
+printf 'server_name ;\nproxy_pass http://localhost:8081;\n' >"$temporary_dir/invalid.conf"
+test_assert_status 'Ignore config with empty domain' 1 reverse_proxy_load_configs
+test_assert_equal 'Keep only valid cached domain' '1' "${#domains_and_ports[@]}"
+rm -f -- "$temporary_dir/invalid.conf"
 
 rm -f -- "$temporary_dir/example.com.conf"
 test_run 'Reload empty config directory' reverse_proxy_load_configs

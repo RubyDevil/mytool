@@ -9,6 +9,8 @@ source "$app_dir/lib/settings.sh"
 source "$app_dir/lib/menu.sh"
 # shellcheck source=core/reverse_proxy.sh
 source "$app_dir/core/reverse_proxy.sh"
+# shellcheck source=core/vps_setup.sh
+source "$app_dir/core/vps_setup.sh"
 unset app_dir
 
 wait_for_key() {
@@ -36,6 +38,139 @@ print_error() {
 
 task_exit() {
    exit 0
+}
+
+task_vps_change_password() {
+   clear
+   passwd
+   wait_for_key
+}
+
+task_vps_setup_existing_key() {
+   local public_key
+
+   clear
+   IFS= read -r -p 'Paste the public SSH key: ' public_key
+   if vps_setup_append_public_key "$public_key"; then
+      print_success 'The public key is ready for SSH login.'
+   else
+      print_error 'Could not add the public key. Paste one complete SSH public key.'
+   fi
+   wait_for_key
+}
+
+task_vps_generate_key() {
+   local key_type="$1"
+   local key_path
+   local public_key
+
+   clear
+   IFS= read -r -p 'Save private key at [~/.ssh/id_'"$key_type"']: ' key_path
+   key_path=${key_path:-"$HOME/.ssh/id_$key_type"}
+   if ! vps_setup_generate_key "$key_type" "$key_path"; then
+      print_error 'SSH key generation failed.'
+      wait_for_key
+      return
+   fi
+   public_key=$(<"$key_path.pub")
+   if ! vps_setup_append_public_key "$public_key"; then
+      print_error 'The key was generated but its public key could not be configured.'
+      wait_for_key
+      return
+   fi
+   printf '\nPrivate key saved at: %s\n' "$key_path"
+   print_success 'The public key is configured and ready for SSH login.'
+   printf '\nSave this private key securely:\n\n'
+   cat -- "$key_path"
+   printf '\n'
+   wait_for_key
+}
+
+task_vps_change_ssh_port() {
+   local current_port
+   local new_port
+
+   clear
+   current_port=$(vps_setup_ssh_port)
+   printf 'Current SSH port: %s\n\n' "$current_port"
+   IFS= read -r -p 'Enter new SSH port: ' new_port
+   if ! vps_setup_validate_ssh_port "$new_port"; then
+      print_error 'Invalid port. Enter a number between 1 and 65535.'
+   elif vps_setup_update_sshd_option Port "$new_port"; then
+      print_success "SSH now listens on port $new_port."
+   else
+      print_error 'SSH configuration was not changed.'
+   fi
+   wait_for_key
+}
+
+task_vps_disable_password_login() {
+   local confirmation
+
+   clear
+   printf '%sWARNING: This can permanently lock you out of this server.%s\n' "$RED" "$RESET"
+   printf 'Confirm that a working SSH public key is configured before continuing.\n'
+   IFS= read -r -p 'Type DISABLE PASSWORD LOGIN to continue: ' confirmation
+   if [[ "$confirmation" != 'DISABLE PASSWORD LOGIN' ]]; then
+      print_error 'Operation canceled.'
+   elif vps_setup_update_sshd_option PasswordAuthentication no; then
+      print_success 'SSH password login has been disabled.'
+   else
+      print_error 'SSH password login was not changed.'
+   fi
+   wait_for_key
+}
+
+task_vps_print_ssh_config() {
+   local handle
+   local identity_file
+   local current_user
+   local ip_address
+   local ssh_port
+
+   clear
+   IFS= read -r -p 'SSH config handle: ' handle
+   if ! vps_setup_validate_ssh_handle "$handle"; then
+      print_error 'Invalid handle. Use letters, digits, dots, underscores, and hyphens.'
+      wait_for_key
+      return
+   fi
+   IFS= read -r -p 'Identity file path (optional): ' identity_file
+   current_user=$(vps_setup_current_user)
+   ip_address=$(vps_setup_ip_address)
+   ssh_port=$(vps_setup_ssh_port)
+   printf '\nHost %s\n    User              %s\n    HostName          %s\n    Port              %s\n' "$handle" "$current_user" "$ip_address" "$ssh_port"
+   if [[ -n "$identity_file" ]]; then
+      printf '    IdentityFile      "%s"\n' "$identity_file"
+   else
+      printf '    Password          <your SSH password>\n'
+   fi
+   wait_for_key
+}
+
+task_vps_set_reinstall_mode() {
+   vps_reinstall_selected=1
+}
+
+task_vps_update_packages() {
+   printf '%sINSTALLING system packages%s\n\n' "$CYAN" "$RESET"
+   vps_setup_update_packages
+}
+
+task_vps_install_software() {
+   local label="$1"
+   local software="$2"
+
+   printf '%sINSTALLING %s%s\n\n' "$CYAN" "$label" "$RESET"
+   vps_setup_install_software "$software" "${vps_reinstall_selected:-0}"
+}
+
+task_vps_software_start() {
+   clear
+}
+
+task_vps_software_complete() {
+   wait_for_key
 }
 
 settings_validate_value() {
@@ -291,6 +426,58 @@ build_menu_tools() {
    menu_clear 'Tools'
    menu_add "${RED}Back${RESET}" build_menu_main
    menu_add "${BLUE}RPM${RESET} ${DIM}(Reverse Proxy Manager)${RESET}" build_menu_reverse_proxy
+   menu_add "${GREEN}VPS Setup${RESET}" build_menu_vps_setup
+}
+
+build_menu_vps_setup() {
+   menu_clear 'VPS Setup'
+   menu_add_action "${RED}Back${RESET}" build_menu_tools
+   menu_add 'Security Setup' build_menu_vps_security
+   menu_add 'Software Management' build_menu_vps_software
+}
+
+build_menu_vps_security() {
+   menu_clear_multi 'Security Setup'
+   menu_add_action "${RED}Back${RESET}" build_menu_vps_setup
+   menu_add 'Change password' task_vps_change_password
+   menu_add 'Setup SSH key' build_menu_vps_ssh_key
+   menu_add 'Change SSH port' task_vps_change_ssh_port
+   menu_add "${RED}Disable SSH password login${RESET}" task_vps_disable_password_login
+   menu_add 'Generate config for easy SSH login' task_vps_print_ssh_config
+}
+
+build_menu_vps_installer() {
+   build_menu_vps_setup
+}
+
+build_menu_vps_ssh_key() {
+   menu_clear 'Setup SSH Key'
+   menu_add "${RED}Back${RESET}" build_menu_vps_security
+   menu_add 'Use existing key' task_vps_setup_existing_key
+   menu_add 'Generate new key' build_menu_vps_key_type
+}
+
+build_menu_vps_key_type() {
+   menu_clear 'Choose SSH Key Type'
+   menu_add "${RED}Back${RESET}" build_menu_vps_ssh_key
+   menu_add 'RSA' task_vps_generate_key rsa
+   menu_add 'ECDSA' task_vps_generate_key ecdsa
+   menu_add 'ED25519' task_vps_generate_key ed25519
+}
+
+build_menu_vps_software() {
+   vps_reinstall_selected=0
+   menu_clear_multi 'Software Management'
+   menu_set_selected_start_callback task_vps_software_start
+   menu_set_selected_complete_callback task_vps_software_complete
+   menu_add_action "${RED}Back${RESET}" build_menu_vps_setup
+   menu_add_selected 'Update system packages' task_vps_update_packages
+   menu_add "${RED}REINSTALL selected software${RESET} ${DIM}(will uninstall)${RESET}" task_vps_set_reinstall_mode
+   menu_add_selected 'Install Nginx' task_vps_install_software Nginx nginx
+   menu_add 'Install Docker' task_vps_install_software Docker docker
+   menu_add_selected 'Install Node.js' task_vps_install_software Node.js node
+   menu_add "Install NVM ${DIM}(Node Version Manager)${RESET}" task_vps_install_software NVM nvm
+   menu_add 'Install PM2' task_vps_install_software PM2 pm2
 }
 
 build_menu_settings_choices() {
@@ -354,6 +541,8 @@ build_menu_reverse_proxy() {
 
    mapfile -t domains < <(printf '%s\n' "${!domains_and_ports[@]}" | LC_ALL=C sort)
    for domain in "${domains[@]}"; do
+      reverse_proxy_validate_domain "$domain" || continue
+      reverse_proxy_validate_port "${domains_and_ports[$domain]}" || continue
       menu_add "${domain} ${DIM}(port: ${domains_and_ports[$domain]})${RESET}" build_menu_reverse_proxy "$domain"
    done
 }

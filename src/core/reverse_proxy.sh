@@ -12,7 +12,7 @@ declare -gA reverse_proxy_files=()
 
 reverse_proxy_validate_domain() {
    local domain="${1-}"
-   ((${#domain} <= 253)) &&
+   [[ -n "$domain" ]] && ((${#domain} <= 253)) &&
       [[ "$domain" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]]
 }
 
