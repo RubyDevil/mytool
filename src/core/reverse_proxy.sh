@@ -10,6 +10,29 @@ unset reverse_proxy_core_dir
 declare -gA domains_and_ports=()
 declare -gA reverse_proxy_files=()
 
+reverse_proxy_run_config_command() {
+   local directory="${settings[NGINX_CONFIG_DIR]}"
+
+   if [[ -w "$directory" ]] || ((EUID == 0)); then
+      "$@"
+   else
+      sudo -- "$@"
+   fi
+}
+
+reverse_proxy_ensure_config_directory() {
+   local directory="${settings[NGINX_CONFIG_DIR]}"
+   local parent_directory
+
+   [[ -d "$directory" ]] && return 0
+   parent_directory=$(dirname -- "$directory")
+   if [[ -w "$parent_directory" ]] || ((EUID == 0)); then
+      mkdir -p -- "$directory"
+   else
+      sudo -- mkdir -p -- "$directory"
+   fi
+}
+
 reverse_proxy_validate_domain() {
    local domain="${1-}"
    [[ -n "$domain" ]] && ((${#domain} <= 253)) &&
@@ -114,7 +137,7 @@ reverse_proxy_save_config() {
    local domain="$1"
    local port="$2"
    local directory="${settings[NGINX_CONFIG_DIR]}"
-   local config_file temporary_file
+   local config_file temporary_file privileged_temporary_file
 
    reverse_proxy_validate_domain "$domain" || {
       printf 'Invalid domain: %s\n' "$domain" >&2
@@ -124,21 +147,25 @@ reverse_proxy_save_config() {
       printf 'Invalid port: %s\n' "$port" >&2
       return 2
    }
-   [[ -d "$directory" ]] || {
-      printf 'Nginx configuration directory does not exist: %s\n' "$directory" >&2
-      return 1
-   }
+   reverse_proxy_ensure_config_directory || return 1
 
    config_file=$(reverse_proxy_config_path "$domain") || return
-   temporary_file=$(mktemp "$directory/.mytool.${domain}.XXXXXX") || return 1
+   temporary_file=$(mktemp) || return 1
    if ! (umask 022; reverse_proxy_render_config "$domain" "$port" >"$temporary_file"); then
       rm -f -- "$temporary_file"
       return 1
    fi
-   if ! mv -f -- "$temporary_file" "$config_file"; then
+   privileged_temporary_file=$(reverse_proxy_run_config_command mktemp "$directory/.mytool.${domain}.XXXXXX") || {
+      rm -f -- "$temporary_file"
+      return 1
+   }
+   if ! reverse_proxy_run_config_command install -m 644 -- "$temporary_file" "$privileged_temporary_file" ||
+      ! reverse_proxy_run_config_command mv -f -- "$privileged_temporary_file" "$config_file"; then
+      reverse_proxy_run_config_command rm -f -- "$privileged_temporary_file" || true
       rm -f -- "$temporary_file"
       return 1
    fi
+   rm -f -- "$temporary_file"
 }
 
 reverse_proxy_delete_config() {
@@ -157,7 +184,11 @@ reverse_proxy_reload_nginx() {
       return 1
    fi
 
-   nginx -t && systemctl reload nginx
+   if ((EUID == 0)); then
+      nginx -t && systemctl reload nginx
+   else
+      sudo -- nginx -t && sudo -- systemctl reload nginx
+   fi
 }
 
 reverse_proxy_apply_config() {
