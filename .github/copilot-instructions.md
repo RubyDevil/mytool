@@ -8,12 +8,12 @@
 
 ## Architecture
 
-- `src/mytool` is the thin application layer. It owns prompts, user-facing tasks, setting-value validation, menu composition, and `main`.
+- `src/mytool` is the thin application layer for VPS administration. It owns prompts, user-facing tasks, setting-value validation, menu composition, and `main`.
 - `src/lib/ansi.sh` owns ANSI constants, escape stripping, and visible string length.
 - `src/lib/pad.sh` owns ANSI-aware padding and the `padr`, `padl`, `padc`, and `pads` aliases.
 - `src/lib/settings.sh` owns defaults and safe settings serialization. Settings files are data, never executable shell code.
 - `src/lib/menu.sh` owns terminal rendering, navigation, scrolling, cleanup, and typed callback dispatch.
-- `src/core/reverse_proxy.sh` is the canonical reverse-proxy domain module. It owns validation, parsing, rendering, persistence, cache state, Nginx validation/reload, and rollback.
+- `src/core/reverse_proxy.sh` is the canonical reverse-proxy domain module. It owns validation, parsing, rendering, persistence, cache state, Nginx validation/reload, and rollback. Add future VPS domains as focused canonical modules under `src/core`.
 - `src/lib/tools/reverse_proxy.sh` and `src/lib/utils.sh` are legacy merge artifacts. Do not import, extend, or treat them as canonical unless the project explicitly migrates to them and removes the current equivalents with matching tests.
 - Tests live in `src/tests`; shared test assertions belong in `src/lib/test.sh`.
 
