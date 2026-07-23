@@ -32,7 +32,9 @@ declare -g menu_tab="    "
 declare -ga menu_labels=()
 declare -ga menu_callbacks=()
 declare -ga menu_argument_counts=()
+declare -ga menu_selectable=()
 declare -gA menu_arguments=()
+declare -gA menu_selected=()
 
 declare -gi menu_width=0
 declare -gi content_width=0
@@ -45,13 +47,40 @@ declare -gi top_option=0
 declare -gi previous_top_option=0
 declare -g menu_stty_state=""
 declare -gi menu_active=0
+declare -gi menu_multi_select=0
+declare -g menu_selected_start_callback=""
+declare -g menu_selected_complete_callback=""
 
 menu_clear() {
    menu_header="${1:-Menu}"
    menu_labels=()
    menu_callbacks=()
    menu_argument_counts=()
+   menu_selectable=()
    menu_arguments=()
+   menu_selected=()
+   menu_multi_select=0
+   menu_selected_start_callback=""
+   menu_selected_complete_callback=""
+}
+
+menu_clear_multi() {
+   menu_clear "$1"
+   menu_multi_select=1
+}
+
+menu_set_selected_complete_callback() {
+   local callback="${1-}"
+
+   [[ "$callback" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 2
+   menu_selected_complete_callback="$callback"
+}
+
+menu_set_selected_start_callback() {
+   local callback="${1-}"
+
+   [[ "$callback" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 2
+   menu_selected_start_callback="$callback"
 }
 
 # Add an item as a label, callback, and zero or more lossless callback arguments.
@@ -72,10 +101,21 @@ menu_add() {
    menu_labels[item_index]="$label"
    menu_callbacks[item_index]="$callback"
    menu_argument_counts[item_index]=$#
+   menu_selectable[item_index]=1
    for argument in "$@"; do
       menu_arguments["$item_index:$argument_index"]="$argument"
       argument_index=$((argument_index + 1))
    done
+}
+
+menu_add_action() {
+   menu_add "$@" || return
+   menu_selectable[$((${#menu_labels[@]} - 1))]=0
+}
+
+menu_add_selected() {
+   menu_add "$@" || return
+   menu_selected[$((${#menu_labels[@]} - 1))]=1
 }
 
 menu_invoke() {
@@ -95,6 +135,98 @@ menu_invoke() {
    done
 
    "$callback" "${arguments[@]}"
+}
+
+menu_toggle_selected() {
+   local -i item_index="${1:-$selected_index}"
+
+   if ((item_index < 0 || item_index >= ${#menu_labels[@]})) || ((menu_selectable[item_index] == 0)); then
+      return 1
+   fi
+
+   if [[ -n "${menu_selected[$item_index]+set}" ]]; then
+      unset 'menu_selected[$item_index]'
+   else
+      menu_selected[$item_index]=1
+   fi
+}
+
+menu_invoke_selected() {
+   local -a callbacks=()
+   local -a argument_counts=()
+   local -a arguments=()
+   local -i item_index argument_index argument_count
+   local -i queue_index=0
+   local -i arguments_index=0
+   local -i status=0
+   local callback
+   local start_callback="$menu_selected_start_callback"
+   local complete_callback="$menu_selected_complete_callback"
+
+   for ((item_index = 0; item_index < ${#menu_labels[@]}; item_index++)); do
+      [[ -n "${menu_selected[$item_index]+set}" ]] || continue
+      callbacks[queue_index]="${menu_callbacks[item_index]}"
+      argument_counts[queue_index]=${menu_argument_counts[item_index]:-0}
+      for ((argument_index = 0; argument_index < argument_counts[queue_index]; argument_index++)); do
+         arguments[arguments_index]="${menu_arguments["$item_index:$argument_index"]}"
+         arguments_index=$((arguments_index + 1))
+      done
+      queue_index=$((queue_index + 1))
+   done
+
+   ((queue_index > 0)) || return 1
+   menu_selected=()
+   if [[ -n "$start_callback" ]]; then
+      if ! declare -F "$start_callback" >/dev/null; then
+         printf 'Menu start callback is not defined: %s\n' "$start_callback" >&2
+         status=1
+      elif ! "$start_callback"; then
+         status=1
+      fi
+   fi
+   arguments_index=0
+   for ((queue_index = 0; queue_index < ${#callbacks[@]}; queue_index++)); do
+      callback="${callbacks[queue_index]}"
+      argument_count=${argument_counts[queue_index]}
+      local -a callback_arguments=()
+      for ((argument_index = 0; argument_index < argument_count; argument_index++)); do
+         callback_arguments[argument_index]="${arguments[arguments_index]}"
+         arguments_index=$((arguments_index + 1))
+      done
+      if [[ -z "$callback" ]] || ! declare -F "$callback" >/dev/null; then
+         printf 'Menu callback is not defined: %s\n' "$callback" >&2
+         status=1
+      elif ! "$callback" "${callback_arguments[@]}"; then
+         status=1
+      fi
+   done
+
+   if [[ -n "$complete_callback" ]]; then
+      if ! declare -F "$complete_callback" >/dev/null; then
+         printf 'Menu completion callback is not defined: %s\n' "$complete_callback" >&2
+         status=1
+      elif ! "$complete_callback"; then
+         status=1
+      fi
+   fi
+
+   return "$status"
+}
+
+menu_display_label() {
+   local -i item_index="$1"
+   local marker='[ ]'
+
+   if ((menu_multi_select)); then
+      if ((menu_selectable[item_index])); then
+         [[ -n "${menu_selected[$item_index]+set}" ]] && marker='[x]'
+         printf '%s %s' "$marker" "${menu_labels[item_index]-}"
+      else
+         printf '%s' "${menu_labels[item_index]-}"
+      fi
+   else
+      printf '%s' "${menu_labels[item_index]-}"
+   fi
 }
 
 menu_resolve_color() {
@@ -135,7 +267,7 @@ menu_prepare_layout() {
 
    content_width=0
    for ((item_index = 0; item_index < ${#menu_labels[@]}; item_index++)); do
-      item_length=$(slen "${menu_labels[item_index]}")
+      item_length=$(slen "$(menu_display_label "$item_index")")
       ((item_length > content_width)) && content_width=$item_length
    done
 
@@ -172,7 +304,7 @@ menu_render() {
    printf '%s\n' "$empty_line"
 
    for ((item_index = top_option; item_index <= end_index; item_index++)); do
-      label="${menu_labels[item_index]-}"
+      label=$(menu_display_label "$item_index")
       printf '%s\n' "${border_color}${vertical}${FG_DEFAULT}${menu_tab}$(pad_right "$label" "$content_width")${menu_tab}${border_color}${vertical}${FG_DEFAULT}"
    done
 
@@ -198,9 +330,10 @@ menu_build() {
 menu_draw_option() {
    local -i item_index="$1"
    local -i visual_index=$((item_index - top_option))
-   local label="${menu_labels[item_index]}"
+   local label
    local pointer_color pointer
 
+   label=$(menu_display_label "$item_index")
    pointer_color=$(menu_resolve_color "${settings[MENU_POINTER_COLOR]:-FG_DEFAULT}")
    pointer="${settings[MENU_POINTER_TYPE]:->}"
 
@@ -316,9 +449,19 @@ menu_navigate() {
          ;;
       "")
          menu_restore_input
-         menu_invoke "$selected_index"
+         if ((menu_multi_select && menu_selectable[selected_index])); then
+            menu_invoke_selected || true
+         else
+            menu_invoke "$selected_index"
+         fi
          menu_build
          stty -icanon -echo min 1 time 0
+         ;;
+      " ")
+         if ((menu_multi_select && menu_selectable[selected_index])); then
+            menu_toggle_selected "$selected_index"
+            menu_draw_option "$selected_index"
+         fi
          ;;
       esac
    done

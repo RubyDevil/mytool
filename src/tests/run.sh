@@ -3,7 +3,7 @@
 test_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 export LC_ALL="${LC_ALL:-C.UTF-8}"
 
-tests=(ansi pad settings menu reverse_proxy application)
+tests=(ansi pad settings menu reverse_proxy vps_setup application)
 status=0
 
 for test_name in "${tests[@]}"; do
