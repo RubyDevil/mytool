@@ -35,6 +35,8 @@ test_assert_equal 'Keep reinstall option selectable' '1' "${menu_selectable[2]}"
 test_assert_equal 'Preselect Nginx' '1' "${menu_selected[3]}"
 test_assert_equal 'Preselect Node.js' '1' "${menu_selected[5]}"
 test_assert_equal 'Describe NVM' 'Install NVM (Node Version Manager)' "$(strip_ansi "${menu_labels[6]}")"
+test_assert_equal 'Describe MongoDB' 'Install MongoDB (mongod, mongosh, database tools)' "$(strip_ansi "${menu_labels[8]}")"
+test_assert_equal 'Keep MongoDB optional' '0' "${menu_selected[8]:-0}"
 test_assert_equal 'Clear before software batch' 'task_vps_software_start' "$menu_selected_start_callback"
 test_assert_equal 'Pause after software batch' 'task_vps_software_complete' "$menu_selected_complete_callback"
 
