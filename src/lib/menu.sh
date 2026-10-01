@@ -50,6 +50,9 @@ declare -gi menu_active=0
 declare -gi menu_multi_select=0
 declare -g menu_selected_start_callback=""
 declare -g menu_selected_complete_callback=""
+declare -g menu_back_callback=""
+declare -ga menu_back_arguments=()
+declare -g menu_back_label="back"
 
 menu_clear() {
    menu_header="${1:-Menu}"
@@ -62,6 +65,49 @@ menu_clear() {
    menu_multi_select=0
    menu_selected_start_callback=""
    menu_selected_complete_callback=""
+   menu_back_callback=""
+   menu_back_arguments=()
+   menu_back_label="back"
+}
+
+# Set the callback, with lossless arguments, that Esc or q invokes.
+menu_set_back() {
+   local callback="${1-}"
+
+   [[ "$callback" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 2
+   shift
+   menu_back_callback="$callback"
+   menu_back_arguments=("$@")
+   menu_back_label="back"
+}
+
+# Like menu_set_back, for a root menu where Esc or q leaves the application.
+menu_set_exit() {
+   menu_set_back "$@" || return
+   menu_back_label="exit"
+}
+
+menu_go_back() {
+   local callback="$menu_back_callback"
+   local -a arguments=("${menu_back_arguments[@]}")
+
+   [[ -n "$callback" ]] || return 1
+   if ! declare -F "$callback" >/dev/null; then
+      printf 'Menu back callback is not defined: %s\n' "$callback" >&2
+      return 1
+   fi
+   "$callback" "${arguments[@]}"
+}
+
+menu_footer() {
+   local back=""
+
+   [[ -n "$menu_back_callback" ]] && back="   Esc/q: $menu_back_label"
+   if ((menu_multi_select)); then
+      printf '%s' "Space: toggle   Enter: run${back}"
+   else
+      printf '%s' "Enter: select${back}"
+   fi
 }
 
 menu_clear_multi() {
@@ -261,8 +307,10 @@ menu_prepare_layout() {
    local -i rows
    local -i header_length
 
+   local -i footer_length
+
    rows=$(menu_terminal_rows)
-   max_options=$((rows - 6))
+   max_options=$((rows - 8))
    ((max_options < 1)) && max_options=1
 
    content_width=0
@@ -273,6 +321,8 @@ menu_prepare_layout() {
 
    header_length=$(slen "$menu_header")
    ((header_length > content_width)) && content_width=$header_length
+   footer_length=$(slen "$(menu_footer)")
+   ((footer_length > content_width)) && content_width=$footer_length
    menu_width=$((content_width + 2 + (${#menu_tab} * 2)))
    opt_left=$((1 + ${#menu_tab}))
 }
@@ -309,6 +359,8 @@ menu_render() {
    done
 
    printf '%s\n' "$empty_line"
+   printf '%s\n' "${border_color}$(pad_center "$middle_left" "$middle_right" "$menu_width" "$horizontal")${FG_DEFAULT}"
+   printf '%s\n' "${border_color}${vertical}${FG_DEFAULT}${menu_tab}$(pad_right "${DIM}$(menu_footer)${RESET}" "$content_width")${menu_tab}${border_color}${vertical}${FG_DEFAULT}"
    printf '%s' "${border_color}$(pad_center "$bottom_left" "$bottom_right" "$menu_width" "$horizontal")${FG_DEFAULT}"
 }
 
@@ -416,6 +468,14 @@ menu_terminal_cleanup() {
    return "$status"
 }
 
+menu_navigate_back() {
+   [[ -n "$menu_back_callback" ]] || return 0
+   menu_restore_input
+   menu_go_back
+   menu_build
+   stty -icanon -echo min 1 time 0
+}
+
 menu_navigate() {
    local key sequence
 
@@ -445,7 +505,11 @@ menu_navigate() {
          case "$sequence" in
          "[A") menu_move_up ;;
          "[B") menu_move_down ;;
+         "") menu_navigate_back ;;
          esac
+         ;;
+      q | Q)
+         menu_navigate_back
          ;;
       "")
          menu_restore_input
