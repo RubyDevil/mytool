@@ -21,11 +21,12 @@ test_run 'Invoke typed callback' menu_invoke 0
 test_assert_equal 'Preserve callback argument' "argument with spaces; touch $marker" "$captured_argument"
 test_run 'Do not execute callback argument' test ! -e "$marker"
 
-MENU_HEIGHT=8
+MENU_HEIGHT=10
 rendered=$(menu_render)
 first_line=$(printf '%s\n' "$rendered" | head -n 1)
-test_assert_equal 'Render terminal-height frame' '8' "$(printf '%s\n' "$rendered" | wc -l)"
-test_assert_equal 'Render stable frame width' '16' "$(slen "$first_line")"
+test_assert_equal 'Render terminal-height frame' '10' "$(printf '%s\n' "$rendered" | wc -l)"
+test_assert_equal 'Widen frame to fit footer' '23' "$(slen "$first_line")"
+test_assert_equal 'Render footer hints' '│    Enter: select    │' "$(strip_ansi "$(sed -n 9p <<<"$rendered")")"
 plain_first_line=$(strip_ansi "$first_line")
 test_assert_equal 'Render light border' '┌' "${plain_first_line:0:1}"
 
@@ -77,7 +78,7 @@ test_run 'Deselect final item' menu_toggle_selected 4
 test_run 'Reselect final item' menu_toggle_selected 4
 test_assert_status 'Reject toggling immediate action' 1 menu_toggle_selected 5
 
-MENU_HEIGHT=12
+MENU_HEIGHT=14
 multi_rendered=$(menu_render)
 plain_multi_rendered=$(strip_ansi "$multi_rendered")
 action_line=$(grep -F 'Unselected' <<<"$plain_multi_rendered")
@@ -106,5 +107,22 @@ test_assert_equal 'Run completion once per batch' '1' "$completion_calls"
 
 menu_clear 'Single Test'
 test_assert_equal 'Reset multi-select mode' '0' "$menu_multi_select"
+
+back_calls=()
+record_back() {
+   back_calls+=("$#:$*")
+}
+test_assert_status 'Fail back without a target' 1 menu_go_back
+test_assert_status 'Reject command-string back callback' 2 menu_set_back 'record_back; true'
+test_run 'Set back target' menu_set_back record_back 'value with spaces' ''
+test_assert_equal 'Show back hint in footer' 'Enter: select   Esc/q: back' "$(menu_footer)"
+test_run 'Go back' menu_go_back
+test_assert_equal 'Pass back arguments losslessly' '2:value with spaces ' "${back_calls[0]}"
+test_run 'Set exit target' menu_set_exit record_back
+test_assert_equal 'Show exit hint in footer' 'Enter: select   Esc/q: exit' "$(menu_footer)"
+menu_clear_multi 'Multi Back'
+test_assert_equal 'Clear back target' '' "$menu_back_callback"
+menu_set_back record_back
+test_assert_equal 'Show multi-select hints in footer' 'Space: toggle   Enter: run   Esc/q: back' "$(menu_footer)"
 
 test_finish

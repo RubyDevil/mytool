@@ -13,20 +13,25 @@
 - `src/lib/pad.sh` owns ANSI-aware padding and the `padr`, `padl`, `padc`, and `pads` aliases.
 - `src/lib/settings.sh` owns defaults and safe settings serialization. Settings files are data, never executable shell code.
 - `src/lib/menu.sh` owns terminal rendering, navigation, scrolling, cleanup, and typed callback dispatch.
+- `src/lib/sidebar.sh` owns the two-pane sidebar viewer (item list plus scrollable content) built on the menu's borders and colors.
+- `src/lib/system.sh` owns privileged command execution and atomic privileged file installs.
 - `src/core/reverse_proxy.sh` is the canonical reverse-proxy domain module. It owns validation, parsing, rendering, persistence, cache state, Nginx validation/reload, and rollback.
+- `src/core/util_scripts.sh` owns the utility-scripts repository sync, install records, `install.sh`/`uninstall.sh` hooks, and rollback. The scripts themselves live in the separate `RubyDevil/mytool-utility-scripts` repository; `util-scripts/` mirrors its layout as the test fixture. When the repository layout contract changes, update `util-scripts/` and that repository's README together.
+- `src/core/self_update.sh` owns pulling mytool's own checkout and installing the `mytool` launcher. Post-update initialization hooks are listed in `mytool_post_update_hooks` in `src/mytool` and run by the freshly restarted process.
 - `src/lib/tools/reverse_proxy.sh` and `src/lib/utils.sh` are legacy merge artifacts. Do not import, extend, or treat them as canonical unless the project explicitly migrates to them and removes the current equivalents with matching tests.
 - Tests live in `src/tests`; shared test assertions belong in `src/lib/test.sh`.
 
 ## Behavioral Invariants
 
-- Preserve the existing menu appearance and interaction: light/heavy Unicode borders, ANSI colors, centered header, pointer plus inverse selected item, arrow-key navigation, scrolling, wraparound, and reliable cursor/TTY restoration.
-- Build menus with `menu_clear` and `menu_add`. Store callbacks as function names with separate arguments and invoke them through `menu_invoke`; never construct or evaluate command strings.
+- Preserve the existing menu appearance and interaction: light/heavy Unicode borders, ANSI colors, centered header, pointer plus inverse selected item, arrow-key navigation, Esc/q back navigation, the key-hint footer, scrolling, wraparound, and reliable cursor/TTY restoration.
+- Build menus with `menu_clear` and `menu_add`. Declare the parent menu with `menu_set_back` (`menu_set_exit` for the root menu) instead of adding a Back or Exit item. Store callbacks as function names with separate arguments and invoke them through `menu_invoke`; never construct or evaluate command strings.
 - Keep rendering testable without a TTY through `menu_render` and `MENU_HEIGHT`.
 - Resolve paths relative to `${BASH_SOURCE[0]}` so scripts work from any current directory. Source libraries defensively when they may also be used standalone.
 - Validate all external input before using it in paths, arithmetic, settings, or Nginx configuration. Quote expansions and use `--` for filesystem operands where supported.
 - Never use `eval` or `source` a settings file. Preserve the deterministic escaped `KEY=value` format, private atomic writes, default merging, malformed-line reporting, and read-only compatibility with the legacy array-assignment format.
 - Reverse-proxy writes and deletes must remain atomic and transactional. Run `nginx -t` before reload, restore the previous file/state when validation or reload fails, and keep `domains_and_ports` free of stale entries.
 - Do not perform real Nginx reloads or write to system Nginx directories in tests; stub `reverse_proxy_reload_nginx` and use temporary directories.
+- Do not run privileged commands or write to system paths in tests; stub `system_run_privileged` and point the `UTIL_SCRIPTS_*_DIR` and `SELF_UPDATE_BIN_DIR` overrides at temporary directories.
 - Keep `src/mytool` safe to source by guarding `main` with `[[ "${BASH_SOURCE[0]}" == "$0" ]]`.
 
 ## Change Discipline
@@ -42,7 +47,7 @@
 Run syntax checks for every shell entrypoint and module touched. A repository-wide check is:
 
 ```bash
-bash -n src/mytool src/core/*.sh src/lib/*.sh src/lib/tools/*.sh src/tests/*.sh
+bash -n src/mytool src/core/*.sh src/lib/*.sh src/lib/tools/*.sh src/tests/*.sh util-scripts/*/*.sh
 ```
 
 Run the complete suite after code changes:
