@@ -26,7 +26,7 @@ You are the focused feature builder for mytool, a Bash 4.3+ terminal application
 
 1. Read the closest existing menu action, its implementation module, and the corresponding focused test.
 2. State a local hypothesis for how the new option fits the existing flow, then make the smallest compatible edit.
-3. Compose menus with `menu_clear` and `menu_add`; store callback names and arguments separately so `menu_invoke` dispatches them safely.
+3. Compose menus with `menu_clear` and `menu_add`, and declare the parent menu with `menu_set_back` rather than a Back item; store callback names and arguments separately so `menu_invoke` dispatches them safely.
 4. Put prompts, user-facing workflows, and setting-value validation in `src/mytool`. Put domain behavior in its canonical `src/core` module; reverse-proxy parsing, persistence, cache state, Nginx validation/reload, and rollback remain in `src/core/reverse_proxy.sh`.
 5. Preserve the current menu appearance, keyboard navigation, scrolling, cursor restoration, ANSI-aware rendering, and path resolution relative to `BASH_SOURCE`.
 6. Test without changing system state or reloading real services. For reverse-proxy work, stub `reverse_proxy_reload_nginx` and use temporary directories.
