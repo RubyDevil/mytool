@@ -146,6 +146,7 @@ vps_setup_install_software() {
    nginx) package=nginx ;;
    docker) package=docker.io ;;
    node) package=nodejs ;;
+   mongodb) vps_setup_install_mongodb "$reinstall"; return ;;
    nvm) curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash; return ;;
    pm2) command -v npm >/dev/null && npm install -g pm2; return ;;
    *) return 2 ;;
@@ -156,4 +157,159 @@ vps_setup_install_software() {
    else
       vps_setup_run_privileged apt-get install -y -- "$package"
    fi
+}
+
+vps_setup_os_release_value() {
+   local key="$1"
+
+   awk -F= -v key="$key" '
+      $1 == key {
+         value = substr($0, length(key) + 2)
+         gsub(/^["\047]|["\047]$/, "", value)
+         print value
+         exit
+      }
+   ' "${VPS_SETUP_OS_RELEASE:-/etc/os-release}" 2>/dev/null
+}
+
+vps_setup_architecture() {
+   dpkg --print-architecture 2>/dev/null
+}
+
+vps_setup_cpu_supports_avx() {
+   grep -qw avx -- "${VPS_SETUP_CPUINFO:-/proc/cpuinfo}" 2>/dev/null
+}
+
+vps_setup_download_key() {
+   local url="$1"
+   local destination="$2"
+   local armored_key
+   local status
+
+   armored_key=$(mktemp) || return 1
+   curl -fsSL -o "$armored_key" "$url" &&
+      gpg --batch --yes --dearmor -o "$destination" "$armored_key"
+   status=$?
+   rm -f -- "$armored_key"
+   return "$status"
+}
+
+vps_setup_mongodb_repo_line() {
+   local distribution="$1"
+   local codename="$2"
+   local architecture="$3"
+   local keyring="$4"
+   local version="$5"
+   local component
+
+   case "$distribution" in
+   ubuntu) component=multiverse ;;
+   debian) component=main ;;
+   *) return 2 ;;
+   esac
+   [[ "$codename" =~ ^[a-z]+$ && "$architecture" =~ ^(amd64|arm64)$ ]] || return 2
+   printf 'deb [ arch=%s signed-by=%s ] https://repo.mongodb.org/apt/%s %s/mongodb-org/%s %s\n' \
+      "$architecture" "$keyring" "$distribution" "$codename" "$version" "$component"
+}
+
+vps_setup_restore_file() {
+   local backup_file="$1"
+   local destination="$2"
+
+   if [[ -n "$backup_file" ]]; then
+      vps_setup_run_privileged install -m 644 -- "$backup_file" "$destination"
+   else
+      vps_setup_run_privileged rm -f -- "$destination"
+   fi
+}
+
+vps_setup_configure_mongodb_repository() {
+   local repo_line="$1"
+   local key_url="$2"
+   local keyring="$3"
+   local sources_list="$4"
+   local temporary_keyring
+   local temporary_list
+   local keyring_backup=''
+   local list_backup=''
+   local status=0
+
+   temporary_keyring=$(mktemp) || return 1
+   temporary_list=$(mktemp) || {
+      rm -f -- "$temporary_keyring"
+      return 1
+   }
+   if [[ -f "$keyring" ]]; then
+      keyring_backup=$(mktemp) && cp -- "$keyring" "$keyring_backup" || status=1
+   fi
+   if [[ -f "$sources_list" ]]; then
+      list_backup=$(mktemp) && cp -- "$sources_list" "$list_backup" || status=1
+   fi
+
+   if ((status != 0)); then
+      printf 'Could not back up the existing MongoDB APT sources.\n' >&2
+   else
+      if ! vps_setup_download_key "$key_url" "$temporary_keyring"; then
+         printf 'Could not download the MongoDB signing key.\n' >&2
+         status=1
+      elif ! printf '%s\n' "$repo_line" >"$temporary_list" ||
+         ! vps_setup_run_privileged install -D -m 644 -- "$temporary_keyring" "$keyring" ||
+         ! vps_setup_run_privileged install -D -m 644 -- "$temporary_list" "$sources_list" ||
+         ! vps_setup_run_privileged apt-get update; then
+         printf 'Enabling the MongoDB repository or updating APT failed; the previous APT sources were restored.\n' >&2
+         vps_setup_restore_file "$list_backup" "$sources_list"
+         vps_setup_restore_file "$keyring_backup" "$keyring"
+         status=1
+      fi
+   fi
+   rm -f -- "$temporary_keyring" "$temporary_list" ${keyring_backup:+"$keyring_backup"} ${list_backup:+"$list_backup"}
+   return "$status"
+}
+
+vps_setup_start_mongodb() {
+   command -v systemctl >/dev/null || return 0
+   vps_setup_run_privileged systemctl daemon-reload &&
+      vps_setup_run_privileged systemctl enable --now mongod
+}
+
+vps_setup_install_mongodb() {
+   local reinstall="${1:-0}"
+   local version=9.0
+   local key_url=https://pgp.mongodb.com/server-9.asc
+   local keyring="${VPS_SETUP_APT_KEYRING_DIR:-/usr/share/keyrings}/mongodb-server-9.gpg"
+   local sources_list="${VPS_SETUP_APT_SOURCES_DIR:-/etc/apt/sources.list.d}/mongodb-org-$version.list"
+   local distribution
+   local codename
+   local architecture
+   local repo_line
+   local -a packages=(mongodb-org mongodb-org-database mongodb-org-server mongodb-org-mongos
+      mongodb-org-tools mongodb-org-database-tools-extra mongodb-mongosh mongodb-database-tools)
+
+   distribution=$(vps_setup_os_release_value ID)
+   codename=$(vps_setup_os_release_value VERSION_CODENAME)
+   architecture=$(vps_setup_architecture)
+   if [[ "$distribution" != ubuntu && "$distribution" != debian ]]; then
+      printf 'MongoDB installation requires Ubuntu or Debian.\n' >&2
+      return 2
+   fi
+   if [[ "$architecture" != amd64 && "$architecture" != arm64 ]]; then
+      printf 'MongoDB requires an amd64 or arm64 system; found %s.\n' "${architecture:-unknown}" >&2
+      return 2
+   fi
+   if [[ "$architecture" == amd64 ]] && ! vps_setup_cpu_supports_avx; then
+      printf 'MongoDB %s requires a CPU with AVX support, which this server does not report.\n' "$version" >&2
+      return 2
+   fi
+   repo_line=$(vps_setup_mongodb_repo_line "$distribution" "$codename" "$architecture" "$keyring" "$version") || {
+      printf 'Could not determine the release codename for this system.\n' >&2
+      return 2
+   }
+
+   vps_setup_run_privileged apt-get install -y -- ca-certificates curl gnupg || return 1
+   vps_setup_configure_mongodb_repository "$repo_line" "$key_url" "$keyring" "$sources_list" || return 1
+   if [[ "$reinstall" == 1 ]]; then
+      vps_setup_run_privileged apt-get remove -y -- "${packages[@]}" || return 1
+   fi
+   vps_setup_run_privileged apt-get install -y -- mongodb-org || return 1
+   vps_setup_start_mongodb
 }

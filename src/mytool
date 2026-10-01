@@ -478,6 +478,7 @@ build_menu_vps_software() {
    menu_add_selected 'Install Node.js' task_vps_install_software Node.js node
    menu_add "Install NVM ${DIM}(Node Version Manager)${RESET}" task_vps_install_software NVM nvm
    menu_add 'Install PM2' task_vps_install_software PM2 pm2
+   menu_add "Install MongoDB ${DIM}(mongod, mongosh, database tools)${RESET}" task_vps_install_software MongoDB mongodb
 }
 
 build_menu_settings_choices() {
