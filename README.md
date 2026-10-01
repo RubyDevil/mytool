@@ -10,6 +10,9 @@
 Reverse-proxy tasks additionally require Nginx and systemd, plus permission to write to the
 configured Nginx directory and reload Nginx.
 
+Installing MongoDB adds the official MongoDB 9.0 APT repository and requires Ubuntu or Debian on
+amd64 (with AVX CPU support) or arm64.
+
 ## Run
 
 ```bash
