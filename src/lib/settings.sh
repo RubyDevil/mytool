@@ -8,6 +8,7 @@ declare -gA default_settings=(
    [MENU_BORDER_COLOR]="WHITE"
    [MENU_POINTER_COLOR]="WHITE"
    [MENU_POINTER_TYPE]=">"
+   [UTIL_SCRIPTS_REPO]=""
 )
 declare -gA settings=()
 

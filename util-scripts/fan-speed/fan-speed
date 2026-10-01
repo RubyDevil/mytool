@@ -1,0 +1,24 @@
+#!/bin/bash
+
+if [[ $# -ne 1 || ! "$1" =~ ^[0-9]{1,3}$ ]] || ((10#$1 > 100)); then
+    echo "Usage: fan-speed 0-100"
+    exit 1
+fi
+
+# Force base 10 so values such as 08 are not read as octal.
+speed=$((10#$1))
+
+# Re-run as root; mytool installs a passwordless sudoers rule for this script.
+if ((EUID != 0)); then
+    exec sudo -- "$0" "$speed"
+fi
+
+hex=$(printf '%02x' "$speed")
+
+# Enable manual fan control
+ipmitool raw 0x30 0x30 0x01 0x00
+
+# Set all fans to requested percentage
+ipmitool raw 0x30 0x30 0x02 0xff "0x$hex"
+
+echo "Fan speed set to ${speed}%"

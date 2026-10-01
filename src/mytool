@@ -7,11 +7,21 @@ source "$app_dir/lib/ansi.sh"
 source "$app_dir/lib/settings.sh"
 # shellcheck source=lib/menu.sh
 source "$app_dir/lib/menu.sh"
+# shellcheck source=lib/sidebar.sh
+source "$app_dir/lib/sidebar.sh"
 # shellcheck source=core/reverse_proxy.sh
 source "$app_dir/core/reverse_proxy.sh"
 # shellcheck source=core/vps_setup.sh
 source "$app_dir/core/vps_setup.sh"
+# shellcheck source=core/util_scripts.sh
+source "$app_dir/core/util_scripts.sh"
+# shellcheck source=core/self_update.sh
+source "$app_dir/core/self_update.sh"
+mytool_root_dir=$(cd -- "$app_dir/.." && pwd)
 unset app_dir
+
+# Initialization run by the freshly updated code after every update.
+mytool_post_update_hooks=(post_update_install_launcher post_update_refresh_util_scripts)
 
 wait_for_key() {
    printf '\n%sPress any key to continue...%s' "$DIM" "$RESET"
@@ -173,6 +183,154 @@ task_vps_software_complete() {
    wait_for_key
 }
 
+util_scripts_status_label() {
+   case "$(util_scripts_status "$1")" in
+   installed) printf '%s(installed)%s' "$GREEN" "$RESET" ;;
+   outdated) printf '%s(update available)%s' "$YELLOW" "$RESET" ;;
+   removed) printf '%s(removed from repository)%s' "$RED" "$RESET" ;;
+   *) printf '%s(not installed)%s' "$DIM" "$RESET" ;;
+   esac
+}
+
+util_scripts_describe() {
+   local name="$1"
+
+   printf 'Status: %s\n' "$(util_scripts_status_label "$name")"
+   printf 'Path:   %s\n\n' "$(util_scripts_target "$name")"
+   util_scripts_doc "$name"
+}
+
+# Download the scripts repository the first time the category opens.
+task_util_scripts_open() {
+   if [[ ! -d "$(util_scripts_cache_dir)/.git" && -n "${settings[UTIL_SCRIPTS_REPO]-}" ]]; then
+      clear
+      printf '%sDownloading utility scripts from %s%s\n\n' "$DIM" "${settings[UTIL_SCRIPTS_REPO]}" "$RESET"
+      if ! util_scripts_sync; then
+         printf '\n'
+         print_error 'Could not download the scripts repository.'
+         wait_for_key
+      fi
+   fi
+   build_menu_util_scripts
+}
+
+task_util_scripts_update() {
+   clear
+   printf '%sUPDATING utility scripts from %s%s\n\n' "$CYAN" "${settings[UTIL_SCRIPTS_REPO]:-the repository}" "$RESET"
+   if ! util_scripts_sync; then
+      printf '\n'
+      print_error 'Could not pull the scripts repository; nothing was changed.'
+   elif util_scripts_update_installed; then
+      print_success 'Utility scripts are up to date.'
+   else
+      print_error 'Some utility scripts could not be updated; their previous versions were kept.'
+   fi
+   wait_for_key
+}
+
+task_util_scripts_show() {
+   local name
+   local -a names=()
+
+   mapfile -t names < <(util_scripts_all)
+   if ((${#names[@]} == 0)); then
+      clear
+      print_error 'No utility scripts are available. Check UTIL_SCRIPTS_REPO in the settings.'
+      wait_for_key
+      return
+   fi
+   sidebar_clear 'Scripts' util_scripts_describe
+   for name in "${names[@]}"; do
+      sidebar_add "$name"
+   done
+   sidebar_start
+}
+
+task_util_scripts_batch_start() {
+   clear
+}
+
+task_util_scripts_install() {
+   local name="$1"
+
+   printf '%sINSTALLING %s%s\n\n' "$CYAN" "$name" "$RESET"
+   if util_scripts_install "$name"; then
+      print_success "$name is installed at $(util_scripts_target "$name")."
+   else
+      print_error "$name was not installed."
+   fi
+   printf '\n'
+}
+
+task_util_scripts_install_complete() {
+   wait_for_key
+   build_menu_util_scripts_install
+}
+
+task_util_scripts_uninstall() {
+   local name="$1"
+
+   printf '%sUNINSTALLING %s%s\n\n' "$CYAN" "$name" "$RESET"
+   if util_scripts_uninstall "$name"; then
+      print_success "$name was uninstalled."
+   else
+      print_error "$name could not be fully uninstalled."
+   fi
+   printf '\n'
+}
+
+task_util_scripts_uninstall_complete() {
+   wait_for_key
+   build_menu_util_scripts_uninstall
+}
+
+post_update_install_launcher() {
+   printf 'Installing the mytool command at %s\n' "$(self_update_launcher)"
+   if ! self_update_install_launcher "$mytool_root_dir"; then
+      print_error 'Could not install the mytool command.'
+      return 1
+   fi
+}
+
+post_update_refresh_util_scripts() {
+   printf 'Updating installed utility scripts\n'
+   if ! util_scripts_refresh; then
+      print_error 'Some utility scripts could not be updated.'
+      return 1
+   fi
+}
+
+task_post_update() {
+   local hook
+   local status=0
+
+   clear
+   printf '%sINITIALIZING mytool components%s\n\n' "$CYAN" "$RESET"
+   for hook in "${mytool_post_update_hooks[@]}"; do
+      "$hook" || status=1
+   done
+   printf '\n'
+   if ((status == 0)); then
+      print_success 'mytool is up to date. Run it from anywhere with: mytool'
+   else
+      print_error 'mytool was updated, but some components failed to initialize.'
+   fi
+   wait_for_key
+}
+
+task_update_mytool() {
+   clear
+   printf '%sUPDATING mytool from %s%s\n\n' "$CYAN" "$mytool_root_dir" "$RESET"
+   if ! self_update_pull "$mytool_root_dir"; then
+      printf '\n'
+      print_error 'mytool was not updated.'
+      wait_for_key
+      return
+   fi
+   # Restart with the new code so its own initialization runs.
+   exec bash -- "$mytool_root_dir/src/mytool" --post-update
+}
+
 settings_validate_value() {
    local key="$1"
    local value="$2"
@@ -194,6 +352,9 @@ settings_validate_value() {
       ;;
    MENU_POINTER_TYPE)
       [[ $(slen "$value") -eq 1 ]]
+      ;;
+   UTIL_SCRIPTS_REPO)
+      [[ -z "$value" ]] || util_scripts_validate_repo "$value"
       ;;
    *)
       return 1
@@ -417,28 +578,69 @@ task_restore_default_settings_key() {
 
 build_menu_main() {
    menu_clear 'Main Menu'
-   menu_add "${RED}Exit${RESET}" task_exit
+   menu_set_exit task_exit
    menu_add 'Tools' build_menu_tools
+   menu_add 'Utility Scripts' task_util_scripts_open
+   menu_add "${CYAN}Update MyTool${RESET}" task_update_mytool
    menu_add "${DIM}Edit settings${RESET}" build_menu_settings
+}
+
+build_menu_util_scripts() {
+   menu_clear 'Utility Scripts'
+   menu_set_back build_menu_main
+   menu_add 'Show Scripts' task_util_scripts_show
+   menu_add "${GREEN}Install Scripts${RESET}" build_menu_util_scripts_install
+   menu_add "${RED}Uninstall Scripts${RESET}" build_menu_util_scripts_uninstall
+   menu_add "${CYAN}Update Scripts${RESET}" task_util_scripts_update
+}
+
+build_menu_util_scripts_install() {
+   local name
+
+   menu_clear_multi 'Install Scripts'
+   menu_set_selected_start_callback task_util_scripts_batch_start
+   menu_set_selected_complete_callback task_util_scripts_install_complete
+   menu_set_back build_menu_util_scripts
+   while IFS= read -r name; do
+      menu_add "$name $(util_scripts_status_label "$name")" task_util_scripts_install "$name"
+   done < <(util_scripts_available)
+   if ((${#menu_labels[@]} == 0)); then
+      menu_add_action "${DIM}No scripts found; check UTIL_SCRIPTS_REPO in the settings${RESET}" build_menu_util_scripts_install
+   fi
+}
+
+build_menu_util_scripts_uninstall() {
+   local name
+
+   menu_clear_multi 'Uninstall Scripts'
+   menu_set_selected_start_callback task_util_scripts_batch_start
+   menu_set_selected_complete_callback task_util_scripts_uninstall_complete
+   menu_set_back build_menu_util_scripts
+   while IFS= read -r name; do
+      menu_add "$name $(util_scripts_status_label "$name")" task_util_scripts_uninstall "$name"
+   done < <(util_scripts_installed)
+   if ((${#menu_labels[@]} == 0)); then
+      menu_add_action "${DIM}No scripts are installed${RESET}" build_menu_util_scripts_uninstall
+   fi
 }
 
 build_menu_tools() {
    menu_clear 'Tools'
-   menu_add "${RED}Back${RESET}" build_menu_main
+   menu_set_back build_menu_main
    menu_add "${BLUE}RPM${RESET} ${DIM}(Reverse Proxy Manager)${RESET}" build_menu_reverse_proxy
    menu_add "${GREEN}VPS Setup${RESET}" build_menu_vps_setup
 }
 
 build_menu_vps_setup() {
    menu_clear 'VPS Setup'
-   menu_add_action "${RED}Back${RESET}" build_menu_tools
+   menu_set_back build_menu_tools
    menu_add 'Security Setup' build_menu_vps_security
    menu_add 'Software Management' build_menu_vps_software
 }
 
 build_menu_vps_security() {
    menu_clear_multi 'Security Setup'
-   menu_add_action "${RED}Back${RESET}" build_menu_vps_setup
+   menu_set_back build_menu_vps_setup
    menu_add 'Change password' task_vps_change_password
    menu_add 'Setup SSH key' build_menu_vps_ssh_key
    menu_add 'Change SSH port' task_vps_change_ssh_port
@@ -452,14 +654,14 @@ build_menu_vps_installer() {
 
 build_menu_vps_ssh_key() {
    menu_clear 'Setup SSH Key'
-   menu_add "${RED}Back${RESET}" build_menu_vps_security
+   menu_set_back build_menu_vps_security
    menu_add 'Use existing key' task_vps_setup_existing_key
    menu_add 'Generate new key' build_menu_vps_key_type
 }
 
 build_menu_vps_key_type() {
    menu_clear 'Choose SSH Key Type'
-   menu_add "${RED}Back${RESET}" build_menu_vps_ssh_key
+   menu_set_back build_menu_vps_ssh_key
    menu_add 'RSA' task_vps_generate_key rsa
    menu_add 'ECDSA' task_vps_generate_key ecdsa
    menu_add 'ED25519' task_vps_generate_key ed25519
@@ -470,7 +672,7 @@ build_menu_vps_software() {
    menu_clear_multi 'Software Management'
    menu_set_selected_start_callback task_vps_software_start
    menu_set_selected_complete_callback task_vps_software_complete
-   menu_add_action "${RED}Back${RESET}" build_menu_vps_setup
+   menu_set_back build_menu_vps_setup
    menu_add_selected 'Update system packages' task_vps_update_packages
    menu_add "${RED}REINSTALL selected software${RESET} ${DIM}(will uninstall)${RESET}" task_vps_set_reinstall_mode
    menu_add_selected 'Install Nginx' task_vps_install_software Nginx nginx
@@ -486,7 +688,7 @@ build_menu_settings_choices() {
    local value
 
    menu_clear "Choose $key"
-   menu_add "${RED}Back${RESET}" build_menu_settings "$key"
+   menu_set_back build_menu_settings "$key"
    while IFS= read -r value; do
       if [[ "$value" == "${settings[$key]}" ]]; then
          menu_add "${value} ${DIM}(current)${RESET}" task_apply_settings_value "$key" "$value"
@@ -503,7 +705,7 @@ build_menu_settings() {
 
    if [[ -n "$selected_key" ]]; then
       menu_clear 'Edit Setting'
-      menu_add "${RED}Back${RESET}" build_menu_settings
+      menu_set_back build_menu_settings
       menu_add "${CYAN}Inspect${RESET}" task_inspect_settings_key "$selected_key"
       if settings_choice_values "$selected_key" &>/dev/null; then
          menu_add "${YELLOW}Choose value${RESET}" build_menu_settings_choices "$selected_key"
@@ -515,7 +717,7 @@ build_menu_settings() {
    fi
 
    menu_clear 'Settings'
-   menu_add "${RED}Back${RESET}" build_menu_main
+   menu_set_back build_menu_main
    mapfile -t keys < <(printf '%s\n' "${!default_settings[@]}" | LC_ALL=C sort)
    for key in "${keys[@]}"; do
       menu_add "${key} ${DIM}(current: ${settings[$key]})${RESET}" build_menu_settings "$key"
@@ -529,7 +731,7 @@ build_menu_reverse_proxy() {
 
    if [[ -n "$selected_domain" ]]; then
       menu_clear 'Edit Reverse Proxy'
-      menu_add "${RED}Back${RESET}" build_menu_reverse_proxy
+      menu_set_back build_menu_reverse_proxy
       menu_add "${YELLOW}Modify${RESET}" task_modify_reverse_proxy "$selected_domain"
       menu_add "${RED}Delete${RESET}" task_delete_reverse_proxy "$selected_domain"
       return
@@ -537,7 +739,7 @@ build_menu_reverse_proxy() {
 
    reverse_proxy_load_configs &>/dev/null || true
    menu_clear 'Reverse Proxy Manager'
-   menu_add "${RED}Back${RESET}" build_menu_main
+   menu_set_back build_menu_tools
    menu_add "${GREEN}Add new reverse proxy${RESET}" task_add_reverse_proxy
 
    mapfile -t domains < <(printf '%s\n' "${!domains_and_ports[@]}" | LC_ALL=C sort)
@@ -551,6 +753,9 @@ build_menu_reverse_proxy() {
 main() {
    settings_load_from_file || true
    settings_sanitize
+   if [[ "${1-}" == --post-update ]]; then
+      task_post_update
+   fi
    build_menu_main
    menu_start
 }
