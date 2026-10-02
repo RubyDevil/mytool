@@ -628,19 +628,13 @@ build_menu_tools() {
    menu_clear 'Tools'
    menu_set_back build_menu_main
    menu_add "${BLUE}RPM${RESET} ${DIM}(Reverse Proxy Manager)${RESET}" build_menu_reverse_proxy
-   menu_add "${GREEN}VPS Setup${RESET}" build_menu_vps_setup
-}
-
-build_menu_vps_setup() {
-   menu_clear 'VPS Setup'
-   menu_set_back build_menu_tools
-   menu_add 'Security Setup' build_menu_vps_security
-   menu_add 'Software Management' build_menu_vps_software
+   menu_add "${GREEN}Security Setup${RESET}" build_menu_vps_security
+   menu_add "${GREEN}Software Management${RESET}" build_menu_vps_software
 }
 
 build_menu_vps_security() {
    menu_clear_multi 'Security Setup'
-   menu_set_back build_menu_vps_setup
+   menu_set_back build_menu_tools
    menu_add 'Change password' task_vps_change_password
    menu_add 'Setup SSH key' build_menu_vps_ssh_key
    menu_add 'Change SSH port' task_vps_change_ssh_port
@@ -649,7 +643,7 @@ build_menu_vps_security() {
 }
 
 build_menu_vps_installer() {
-   build_menu_vps_setup
+   build_menu_tools
 }
 
 build_menu_vps_ssh_key() {
@@ -672,7 +666,7 @@ build_menu_vps_software() {
    menu_clear_multi 'Software Management'
    menu_set_selected_start_callback task_vps_software_start
    menu_set_selected_complete_callback task_vps_software_complete
-   menu_set_back build_menu_vps_setup
+   menu_set_back build_menu_tools
    menu_add_selected 'Update system packages' task_vps_update_packages
    menu_add "${RED}REINSTALL selected software${RESET} ${DIM}(will uninstall)${RESET}" task_vps_set_reinstall_mode
    menu_add_selected 'Install Nginx' task_vps_install_software Nginx nginx

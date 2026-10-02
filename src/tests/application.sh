@@ -19,21 +19,17 @@ test_assert_equal 'Exit from main menu with Esc or q' 'task_exit:exit' "$menu_ba
 test_run 'Navigate to tools builder' menu_invoke 0
 test_assert_equal 'Build tools menu header' 'Tools' "$menu_header"
 test_assert_equal 'Keep reverse proxy tool entry' 'RPM (Reverse Proxy Manager)' "$(strip_ansi "${menu_labels[0]}")"
-test_assert_equal 'Add VPS Setup tool entry' 'VPS Setup' "$(strip_ansi "${menu_labels[1]}")"
+test_assert_equal 'Add Security Setup tool entry' 'Security Setup' "$(strip_ansi "${menu_labels[1]}")"
+test_assert_equal 'Add Software Management tool entry' 'Software Management' "$(strip_ansi "${menu_labels[2]}")"
 test_run 'Go back from tools menu' menu_go_back
 test_assert_equal 'Return to main menu' 'Main Menu' "$menu_header"
 menu_invoke 0
 
-test_run 'Navigate to VPS Setup builder' menu_invoke 1
-test_assert_equal 'Build VPS Setup menu header' 'VPS Setup' "$menu_header"
-test_assert_equal 'Offer Security Setup' 'Security Setup' "$(strip_ansi "${menu_labels[0]}")"
-test_assert_equal 'Offer Software Management' 'Software Management' "$(strip_ansi "${menu_labels[1]}")"
-
-test_run 'Build security menu' menu_invoke 0
+test_run 'Build security menu' menu_invoke 1
 test_assert_equal 'Build security menu header' 'Security Setup' "$menu_header"
 test_assert_equal 'Enable security multi-select' '1' "$menu_multi_select"
 test_assert_equal 'Keep destructive SSH action red' 'Disable SSH password login' "$(strip_ansi "${menu_labels[3]}")"
-test_assert_equal 'Go back from security menu' 'build_menu_vps_setup' "$menu_back_callback"
+test_assert_equal 'Go back from security menu' 'build_menu_tools' "$menu_back_callback"
 
 build_menu_vps_software
 test_assert_equal 'Build software menu header' 'Software Management' "$menu_header"
@@ -45,6 +41,7 @@ test_assert_equal 'Preselect Node.js' '1' "${menu_selected[4]}"
 test_assert_equal 'Describe NVM' 'Install NVM (Node Version Manager)' "$(strip_ansi "${menu_labels[5]}")"
 test_assert_equal 'Describe MongoDB' 'Install MongoDB (mongod, mongosh, database tools)' "$(strip_ansi "${menu_labels[7]}")"
 test_assert_equal 'Keep MongoDB optional' '0' "${menu_selected[7]:-0}"
+test_assert_equal 'Go back from software menu' 'build_menu_tools' "$menu_back_callback"
 test_assert_equal 'Clear before software batch' 'task_vps_software_start' "$menu_selected_start_callback"
 test_assert_equal 'Pause after software batch' 'task_vps_software_complete' "$menu_selected_complete_callback"
 
