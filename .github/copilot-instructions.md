@@ -18,6 +18,7 @@
 - `src/core/reverse_proxy.sh` is the canonical reverse-proxy domain module. It owns validation, parsing, rendering, persistence, cache state, Nginx validation/reload, and rollback.
 - `src/core/util_scripts.sh` owns the utility-scripts repository sync, install records, `install.sh`/`uninstall.sh` hooks, and rollback. The scripts themselves live in the separate `RubyDevil/mytool-utility-scripts` repository; `util-scripts/` mirrors its layout as the test fixture. When the repository layout contract changes, update `util-scripts/` and that repository's README together.
 - `src/core/self_update.sh` owns pulling mytool's own checkout and installing the `mytool` launcher. Post-update initialization hooks are listed in `mytool_post_update_hooks` in `src/mytool` and run by the freshly restarted process.
+- `install.sh` at the repository root is the standalone `curl ... | bash` bootstrap. It clones (or pulls) the checkout into `MYTOOL_INSTALL_DIR`, then sources the checkout's `self_update.sh` to install the launcher. It cannot source anything before the clone exists, keeps the `install_main` call at the end so a truncated download runs nothing, and must never read stdin (stdin is the script when piped).
 - `src/lib/tools/reverse_proxy.sh` and `src/lib/utils.sh` are legacy merge artifacts. Do not import, extend, or treat them as canonical unless the project explicitly migrates to them and removes the current equivalents with matching tests.
 - Tests live in `src/tests`; shared test assertions belong in `src/lib/test.sh`.
 
@@ -32,7 +33,7 @@
 - Never use `eval` or `source` a settings file. Preserve the deterministic escaped `KEY=value` format, private atomic writes, default merging, malformed-line reporting, and read-only compatibility with the legacy array-assignment format.
 - Reverse-proxy writes and deletes must remain atomic and transactional. Run `nginx -t` before reload, restore the previous file/state when validation or reload fails, and keep `domains_and_ports` free of stale entries.
 - Do not perform real Nginx reloads or write to system Nginx directories in tests; stub `reverse_proxy_reload_nginx` and use temporary directories.
-- Do not run privileged commands or write to system paths in tests; stub `system_run_privileged` and point the `UTIL_SCRIPTS_*_DIR` and `SELF_UPDATE_BIN_DIR` overrides at temporary directories.
+- Do not run privileged commands or write to system paths in tests; stub `system_run_privileged` and point the `UTIL_SCRIPTS_*_DIR`, `SELF_UPDATE_BIN_DIR`, and `MYTOOL_INSTALL_DIR` overrides at temporary directories.
 - Keep `src/mytool` safe to source by guarding `main` with `[[ "${BASH_SOURCE[0]}" == "$0" ]]`.
 
 ## Change Discipline
@@ -48,7 +49,7 @@
 Run syntax checks for every shell entrypoint and module touched. A repository-wide check is:
 
 ```bash
-bash -n src/mytool src/core/*.sh src/lib/*.sh src/lib/tools/*.sh src/tests/*.sh util-scripts/*/*.sh
+bash -n install.sh src/mytool src/core/*.sh src/lib/*.sh src/lib/tools/*.sh src/tests/*.sh util-scripts/*/*.sh
 ```
 
 Run the complete suite after code changes:

@@ -39,7 +39,7 @@ self_update_pull() {
       return 1
    fi
    if ! self_update_is_checkout "$repository"; then
-      printf '%s is not a git checkout; reinstall mytool with git clone.\n' "$repository" >&2
+      printf '%s is not a git checkout; reinstall mytool with install.sh.\n' "$repository" >&2
       return 2
    fi
    self_update_git "$repository" pull --ff-only

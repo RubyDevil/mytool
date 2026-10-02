@@ -17,11 +17,30 @@ Installing Tailscale adds the official Tailscale stable APT repository and requi
 Debian. **Setup Tailscale** in Security Setup then runs `tailscale up` (optionally with a machine
 name and Tailscale SSH) and prints a login URL to join the server to your tailnet.
 
+## Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/RubyDevil/mytool/main/install.sh | bash
+```
+
+The installer clones mytool into `/opt/mytool` and installs a `mytool` command in `/usr/local/bin`.
+It uses `sudo` when it is not run as root, and installs git with `apt-get` when git is missing.
+To clone somewhere else, set `MYTOOL_INSTALL_DIR` to an absolute path:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/RubyDevil/mytool/main/install.sh | MYTOOL_INSTALL_DIR=/srv/mytool bash
+```
+
+Running the installer again pulls the existing checkout and reinstalls the `mytool` command. To
+also update installed utility scripts, use **Update MyTool**.
+
 ## Run
 
 ```bash
-bash src/mytool
+mytool
 ```
+
+From a checkout you have not installed, run `bash src/mytool` instead.
 
 Use the up and down arrow keys to move and Enter to select an item. In multi-select menus,
 press Space to toggle items and Enter to execute the selected items from top to bottom.
@@ -29,11 +48,10 @@ Press Esc or `q` to go back, or to exit from the main menu. Each menu's footer l
 Settings are stored in `~/.mytool.conf` by default. Set `MYTOOL_SETTINGS_FILE` before launching
 to use another file.
 
-## Install and update
+## Update
 
-Clone the repository with git, then choose **Update MyTool** in the main menu. It pulls the latest
-commits (`git pull --ff-only`), restarts mytool with the new code, and runs each component's
-initialization:
+Choose **Update MyTool** in the main menu. It pulls the latest commits (`git pull --ff-only`) into
+the checkout, restarts mytool with the new code, and runs each component's initialization:
 
 - installs a `mytool` command in `/usr/local/bin`, so mytool runs from any directory;
 - updates every installed utility script from the scripts repository.
