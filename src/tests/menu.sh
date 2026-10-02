@@ -124,5 +124,54 @@ menu_clear_multi 'Multi Back'
 test_assert_equal 'Clear back target' '' "$menu_back_callback"
 menu_set_back record_back
 test_assert_equal 'Show multi-select hints in footer' 'Space: toggle   Enter: run   Esc/q: back' "$(menu_footer)"
+test_assert_into_names 'Store footer in any variable' 'Space: toggle   Enter: run   Esc/q: back' menu_footer_into
+
+settings[MENU_BORDER_TYPE]=LIGHT
+menu_add_selected Chosen capture_argument chosen
+test_assert_into_names 'Store display label in any variable' '[x] Chosen' menu_display_label_into 0
+test_assert_into_names 'Store resolved color in any variable' "$RED" menu_resolve_color_into red
+test_assert_into_names 'Store border character in any variable' '┼' menu_border_char_into 1111
+MENU_HEIGHT=12
+test_assert_into_names 'Store menu height in any variable' '12' menu_terminal_rows_into
+
+terminal_size_with() {
+   local stty_output="$1"
+   local tput_lines="$2"
+   local tput_cols="$3"
+   (
+      stty() { printf '%s\n' "$stty_output"; }
+      tput() {
+         case "$1" in
+         lines) printf '%s\n' "$tput_lines" ;;
+         cols) printf '%s\n' "$tput_cols" ;;
+         esac
+      }
+      unset MENU_HEIGHT
+      menu_terminal_size_known=0
+      menu_terminal_rows_into rows
+      printf '%sx%s:%s' "$rows" "$menu_terminal_columns" "$menu_terminal_size_known"
+   )
+}
+test_assert_equal 'Read terminal size from stty' '40x100:1' "$(terminal_size_with '40 100' 30 90)"
+test_assert_equal 'Fall back to tput for a zero stty size' '30x90:1' "$(terminal_size_with '0 0' 30 90)"
+test_assert_equal 'Fall back to 24x80 without a size' '24x80:1' "$(terminal_size_with '' '' '')"
+
+menu_clear 'Draw Test'
+menu_add First capture_argument first
+menu_add Second capture_argument second
+settings[MENU_POINTER_TYPE]='>'
+menu_prepare_layout
+selected_index=0
+drawn_selected=$(menu_draw_option 0)
+drawn_other=$(menu_draw_option 1)
+test_assert_equal 'Position selected option with one cursor move' $'\033[5;4H' "${drawn_selected:0:6}"
+test_assert_equal 'Draw pointer before selected option' "> $(pad_right First "$content_width")" "$(strip_ansi "${drawn_selected:6}")"
+test_assert_equal 'Clear pointer column of other options' $'\033[6;4H  '"$(pad_right Second "$content_width")" "$(strip_ansi "$drawn_other")"
+draw_both_options() {
+   menu_draw_option 0
+   menu_draw_option 1
+}
+test_assert_no_processes 'Redraw options without starting processes' draw_both_options
+test_assert_no_processes 'Render menu without starting processes' menu_render
 
 test_finish

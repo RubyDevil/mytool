@@ -64,6 +64,59 @@ test_assert_status() {
    test_assert_equal "$name" "$expected_status" "$actual_status"
 }
 
+# Print the value an _into helper stores in a caller variable with the given name.
+_test_receive() {
+   local "$1"
+   "$2" "$1" "${@:3}"
+   printf '%s' "${!1}"
+}
+
+# Assert that an _into helper stores its result whatever the caller's variable is named.
+test_assert_into_names() {
+   local name="$1"
+   local expected="$2"
+   shift 2
+   local receiver
+   local expected_all=""
+   local actual=""
+
+   for receiver in text stripped length rows columns name key char fill padded label line; do
+      expected_all+="$receiver=$expected;"
+      actual+="$receiver=$(_test_receive "$receiver" "$@");"
+   done
+   test_assert_equal "$name" "$expected_all" "$actual"
+}
+
+# Store the most recently allocated process ID in the named variable; fails without /proc/loadavg.
+_test_last_pid_into() {
+   local _tlp_load1 _tlp_load5 _tlp_load15 _tlp_tasks _tlp_pid
+
+   [[ -r /proc/loadavg ]] || return 1
+   read -r _tlp_load1 _tlp_load5 _tlp_load15 _tlp_tasks _tlp_pid </proc/loadavg || return 1
+   [[ "$_tlp_pid" =~ ^[0-9]+$ ]] || return 1
+   printf -v "$1" '%s' "$_tlp_pid"
+}
+
+# Assert that a command starts no processes, retrying to absorb unrelated system activity.
+test_assert_no_processes() {
+   local name="$1"
+   shift
+   local -i attempt before after
+
+   if ! _test_last_pid_into before; then
+      test_print_name "$name"
+      printf '[%sSKIP%s]\n' "$DIM" "$RESET"
+      return 0
+   fi
+   for ((attempt = 0; attempt < 3; attempt++)); do
+      _test_last_pid_into before
+      "$@" >/dev/null
+      _test_last_pid_into after
+      ((after == before)) && break
+   done
+   test_assert_equal "$name" '0' "$((after - before))"
+}
+
 test_finish() {
    printf '\n%d tests, %d failures\n' "$test_count" "$test_failures"
    ((test_failures == 0))
