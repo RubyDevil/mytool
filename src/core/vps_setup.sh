@@ -147,6 +147,7 @@ vps_setup_install_software() {
    docker) package=docker.io ;;
    node) package=nodejs ;;
    mongodb) vps_setup_install_mongodb "$reinstall"; return ;;
+   tailscale) vps_setup_install_tailscale "$reinstall"; return ;;
    nvm) curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash; return ;;
    pm2) command -v npm >/dev/null && npm install -g pm2; return ;;
    *) return 2 ;;
@@ -223,11 +224,12 @@ vps_setup_restore_file() {
    fi
 }
 
-vps_setup_configure_mongodb_repository() {
-   local repo_line="$1"
-   local key_url="$2"
-   local keyring="$3"
-   local sources_list="$4"
+vps_setup_configure_apt_repository() {
+   local name="$1"
+   local repo_line="$2"
+   local key_url="$3"
+   local keyring="$4"
+   local sources_list="$5"
    local temporary_keyring
    local temporary_list
    local keyring_backup=''
@@ -247,16 +249,16 @@ vps_setup_configure_mongodb_repository() {
    fi
 
    if ((status != 0)); then
-      printf 'Could not back up the existing MongoDB APT sources.\n' >&2
+      printf 'Could not back up the existing %s APT sources.\n' "$name" >&2
    else
       if ! vps_setup_download_key "$key_url" "$temporary_keyring"; then
-         printf 'Could not download the MongoDB signing key.\n' >&2
+         printf 'Could not download the %s signing key.\n' "$name" >&2
          status=1
       elif ! printf '%s\n' "$repo_line" >"$temporary_list" ||
          ! vps_setup_run_privileged install -D -m 644 -- "$temporary_keyring" "$keyring" ||
          ! vps_setup_run_privileged install -D -m 644 -- "$temporary_list" "$sources_list" ||
          ! vps_setup_run_privileged apt-get update; then
-         printf 'Enabling the MongoDB repository or updating APT failed; the previous APT sources were restored.\n' >&2
+         printf 'Enabling the %s repository or updating APT failed; the previous APT sources were restored.\n' "$name" >&2
          vps_setup_restore_file "$list_backup" "$sources_list"
          vps_setup_restore_file "$keyring_backup" "$keyring"
          status=1
@@ -306,10 +308,80 @@ vps_setup_install_mongodb() {
    }
 
    vps_setup_run_privileged apt-get install -y -- ca-certificates curl gnupg || return 1
-   vps_setup_configure_mongodb_repository "$repo_line" "$key_url" "$keyring" "$sources_list" || return 1
+   vps_setup_configure_apt_repository MongoDB "$repo_line" "$key_url" "$keyring" "$sources_list" || return 1
    if [[ "$reinstall" == 1 ]]; then
       vps_setup_run_privileged apt-get remove -y -- "${packages[@]}" || return 1
    fi
    vps_setup_run_privileged apt-get install -y -- mongodb-org || return 1
    vps_setup_start_mongodb
+}
+
+vps_setup_tailscale_repo_line() {
+   local distribution="$1"
+   local codename="$2"
+   local keyring="$3"
+
+   [[ "$distribution" == ubuntu || "$distribution" == debian ]] || return 2
+   [[ "$codename" =~ ^[a-z]+$ ]] || return 2
+   printf 'deb [signed-by=%s] https://pkgs.tailscale.com/stable/%s %s main\n' "$keyring" "$distribution" "$codename"
+}
+
+vps_setup_start_tailscale() {
+   command -v systemctl >/dev/null || return 0
+   vps_setup_run_privileged systemctl enable --now tailscaled
+}
+
+vps_setup_install_tailscale() {
+   local reinstall="${1:-0}"
+   local keyring="${VPS_SETUP_APT_KEYRING_DIR:-/usr/share/keyrings}/tailscale-archive-keyring.gpg"
+   local sources_list="${VPS_SETUP_APT_SOURCES_DIR:-/etc/apt/sources.list.d}/tailscale.list"
+   local distribution
+   local codename
+   local repo_line
+
+   distribution=$(vps_setup_os_release_value ID)
+   codename=$(vps_setup_os_release_value VERSION_CODENAME)
+   if [[ "$distribution" != ubuntu && "$distribution" != debian ]]; then
+      printf 'Tailscale installation requires Ubuntu or Debian.\n' >&2
+      return 2
+   fi
+   repo_line=$(vps_setup_tailscale_repo_line "$distribution" "$codename" "$keyring") || {
+      printf 'Could not determine the release codename for this system.\n' >&2
+      return 2
+   }
+
+   vps_setup_run_privileged apt-get install -y -- ca-certificates curl gnupg || return 1
+   vps_setup_configure_apt_repository Tailscale "$repo_line" \
+      "https://pkgs.tailscale.com/stable/$distribution/$codename.gpg" "$keyring" "$sources_list" || return 1
+   if [[ "$reinstall" == 1 ]]; then
+      vps_setup_run_privileged apt-get remove -y -- tailscale || return 1
+   fi
+   vps_setup_run_privileged apt-get install -y -- tailscale || return 1
+   vps_setup_start_tailscale
+}
+
+vps_setup_tailscale_installed() {
+   command -v tailscale >/dev/null
+}
+
+vps_setup_validate_tailscale_hostname() {
+   local hostname="${1-}"
+   [[ "$hostname" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]]
+}
+
+vps_setup_tailscale_up() {
+   local enable_ssh="${1:-0}"
+   local hostname="${2-}"
+   local -a options=()
+
+   if [[ -n "$hostname" ]]; then
+      vps_setup_validate_tailscale_hostname "$hostname" || return 2
+      options+=("--hostname=$hostname")
+   fi
+   [[ "$enable_ssh" == 1 ]] && options+=(--ssh)
+   vps_setup_run_privileged tailscale up "${options[@]}"
+}
+
+vps_setup_tailscale_ip() {
+   tailscale ip -4 2>/dev/null | head -n 1
 }

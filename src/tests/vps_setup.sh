@@ -128,12 +128,61 @@ mongodb_architecture=armhf
 test_assert_status 'Reject MongoDB on unsupported architecture' 2 vps_setup_install_mongodb
 mongodb_architecture=amd64
 
+tailscale_keyring="$VPS_SETUP_APT_KEYRING_DIR/tailscale-archive-keyring.gpg"
+tailscale_sources_list="$VPS_SETUP_APT_SOURCES_DIR/tailscale.list"
+downloaded_key_urls=()
+vps_setup_download_key() {
+	downloaded_key_urls+=("$1")
+	printf 'tailscale key\n' >"$2"
+}
+test_assert_equal 'Render Tailscale Debian repository' 	'deb [signed-by=/k.gpg] https://pkgs.tailscale.com/stable/debian bookworm main' 	"$(vps_setup_tailscale_repo_line debian bookworm /k.gpg)"
+test_assert_status 'Reject Tailscale repository for other distro' 2 vps_setup_tailscale_repo_line fedora 40 /k.gpg
+test_assert_status 'Reject unsafe Tailscale codename' 2 vps_setup_tailscale_repo_line ubuntu 'noble main' /k.gpg
+
+privileged_commands=()
+test_assert_status 'Install Tailscale on Ubuntu' 0 vps_setup_install_software tailscale
+test_assert_equal 'Install Tailscale prerequisites first' 'apt-get install -y -- ca-certificates curl gnupg' "${privileged_commands[0]}"
+test_assert_equal 'Download Tailscale key for release' 'https://pkgs.tailscale.com/stable/ubuntu/noble.gpg' "${downloaded_key_urls[0]}"
+test_assert_equal 'Write Tailscale repository' 	"deb [signed-by=$tailscale_keyring] https://pkgs.tailscale.com/stable/ubuntu noble main" 	"$(<"$tailscale_sources_list")"
+test_assert_equal 'Write Tailscale signing key' 'tailscale key' "$(<"$tailscale_keyring")"
+update_index=$(privileged_command_index 'apt-get update')
+install_index=$(privileged_command_index 'apt-get install -y -- tailscale')
+test_run 'Install Tailscale after repository update' test "$update_index" -lt "$install_index"
+test_assert_equal 'Skip Tailscale removal without reinstall' 'missing' "$(privileged_command_index 'apt-get remove -y -- tailscale')"
+
+privileged_commands=()
+test_assert_status 'Reinstall Tailscale' 0 vps_setup_install_software tailscale 1
+remove_index=$(privileged_command_index 'apt-get remove -y -- tailscale')
+install_index=$(privileged_command_index 'apt-get install -y -- tailscale')
+test_run 'Remove Tailscale before reinstall' test "$remove_index" -lt "$install_index"
+
+fail_apt_update=1
+rm -f -- "$tailscale_sources_list" "$tailscale_keyring"
+privileged_commands=()
+test_assert_status 'Fail Tailscale install when APT update fails' 1 vps_setup_install_tailscale
+test_run 'Remove new Tailscale repository after failure' test ! -e "$tailscale_sources_list"
+test_assert_equal 'Skip Tailscale package after update failure' 'missing' "$(privileged_command_index 'apt-get install -y -- tailscale')"
+fail_apt_update=''
+
+privileged_commands=()
+test_run 'Bring Tailscale up' vps_setup_tailscale_up
+test_assert_equal 'Run Tailscale up with privileges' 'tailscale up' "${privileged_commands[0]}"
+privileged_commands=()
+test_run 'Bring Tailscale up with options' vps_setup_tailscale_up 1 web-01
+test_assert_equal 'Pass Tailscale hostname and SSH' 'tailscale up --hostname=web-01 --ssh' "${privileged_commands[0]}"
+privileged_commands=()
+test_assert_status 'Reject unsafe Tailscale hostname' 2 vps_setup_tailscale_up 0 'bad name'
+test_assert_equal 'Run nothing for unsafe Tailscale hostname' 0 "${#privileged_commands[@]}"
+test_assert_status 'Reject Tailscale hostname with option prefix' 1 vps_setup_validate_tailscale_hostname '-ssh'
+
 printf 'ID=fedora
 VERSION_CODENAME=
 ' >"$VPS_SETUP_OS_RELEASE"
 privileged_commands=()
 test_assert_status 'Reject MongoDB on non-Debian distro' 2 vps_setup_install_mongodb
 test_assert_equal 'Change nothing on non-Debian distro' 0 "${#privileged_commands[@]}"
+test_assert_status 'Reject Tailscale on non-Debian distro' 2 vps_setup_install_tailscale
+test_assert_equal 'Change nothing for Tailscale on non-Debian distro' 0 "${#privileged_commands[@]}"
 rm -rf -- "$mongodb_directory"
 unset VPS_SETUP_OS_RELEASE VPS_SETUP_CPUINFO VPS_SETUP_APT_KEYRING_DIR VPS_SETUP_APT_SOURCES_DIR
 
