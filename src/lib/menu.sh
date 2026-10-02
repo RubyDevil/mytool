@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 
 menu_lib_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-if ! declare -F strip_ansi >/dev/null; then
+if ! declare -F strip_ansi_into >/dev/null; then
    # shellcheck source=ansi.sh
    source "$menu_lib_dir/ansi.sh"
 fi
-if ! declare -F pad_right >/dev/null; then
+if ! declare -F pad_right_into >/dev/null; then
    # shellcheck source=pad.sh
    source "$menu_lib_dir/pad.sh"
 fi
@@ -53,6 +53,14 @@ declare -g menu_selected_complete_callback=""
 declare -g menu_back_callback=""
 declare -ga menu_back_arguments=()
 declare -g menu_back_label="back"
+# Styles resolved from the settings by menu_prepare_layout, once per build.
+declare -g menu_border_color="$FG_DEFAULT"
+declare -g menu_pointer_color="$FG_DEFAULT"
+declare -g menu_pointer=">"
+# Terminal size cached by menu_update_terminal_size so redraws never fork.
+declare -gi menu_terminal_lines=24
+declare -gi menu_terminal_columns=80
+declare -gi menu_terminal_size_known=0
 
 menu_clear() {
    menu_header="${1:-Menu}"
@@ -99,15 +107,21 @@ menu_go_back() {
    "$callback" "${arguments[@]}"
 }
 
-menu_footer() {
-   local back=""
+menu_footer_into() {
+   local _mfi_back=""
 
-   [[ -n "$menu_back_callback" ]] && back="   Esc/q: $menu_back_label"
+   [[ -n "$menu_back_callback" ]] && _mfi_back="   Esc/q: $menu_back_label"
    if ((menu_multi_select)); then
-      printf '%s' "Space: toggle   Enter: run${back}"
+      printf -v "$1" '%s' "Space: toggle   Enter: run${_mfi_back}"
    else
-      printf '%s' "Enter: select${back}"
+      printf -v "$1" '%s' "Enter: select${_mfi_back}"
    fi
+}
+
+menu_footer() {
+   local footer
+   menu_footer_into footer
+   printf '%s' "$footer"
 }
 
 menu_clear_multi() {
@@ -259,45 +273,86 @@ menu_invoke_selected() {
    return "$status"
 }
 
-menu_display_label() {
-   local -i item_index="$1"
-   local marker='[ ]'
+menu_display_label_into() {
+   local -i _mdl_index="$2"
+   local _mdl_marker='[ ]'
 
-   if ((menu_multi_select)); then
-      if ((menu_selectable[item_index])); then
-         [[ -n "${menu_selected[$item_index]+set}" ]] && marker='[x]'
-         printf '%s %s' "$marker" "${menu_labels[item_index]-}"
-      else
-         printf '%s' "${menu_labels[item_index]-}"
-      fi
+   if ((menu_multi_select && menu_selectable[_mdl_index])); then
+      [[ -n "${menu_selected[$_mdl_index]+set}" ]] && _mdl_marker='[x]'
+      printf -v "$1" '%s %s' "$_mdl_marker" "${menu_labels[_mdl_index]-}"
    else
-      printf '%s' "${menu_labels[item_index]-}"
+      printf -v "$1" '%s' "${menu_labels[_mdl_index]-}"
    fi
+}
+
+menu_display_label() {
+   local label
+   menu_display_label_into label "$1"
+   printf '%s' "$label"
+}
+
+menu_resolve_color_into() {
+   local _mrc_name="${2^^}"
+   printf -v "$1" '%s' "${ANSI[$_mrc_name]:-$FG_DEFAULT}"
 }
 
 menu_resolve_color() {
-   local name="${1^^}"
-   printf '%s' "${ANSI[$name]:-$FG_DEFAULT}"
+   local color
+   menu_resolve_color_into color "$1"
+   printf '%s' "$color"
 }
 
-menu_border_char() {
-   local key="$1"
+menu_border_char_into() {
    case "${settings[MENU_BORDER_TYPE]^^}" in
-   HEAVY) printf '%s' "${MENU_BORDER_HEAVY[$key]}" ;;
-   *) printf '%s' "${MENU_BORDER_LIGHT[$key]}" ;;
+   HEAVY) printf -v "$1" '%s' "${MENU_BORDER_HEAVY[$2]}" ;;
+   *) printf -v "$1" '%s' "${MENU_BORDER_LIGHT[$2]}" ;;
    esac
 }
 
-menu_terminal_rows() {
-   local rows="${MENU_HEIGHT-}"
+menu_border_char() {
+   local char
+   menu_border_char_into char "$1"
+   printf '%s' "$char"
+}
 
-   if [[ "$rows" =~ ^[0-9]+$ ]] && ((rows > 0)); then
-      printf '%d' "$rows"
+# Refresh the cached terminal size with a single stty call, falling back to tput, then 24x80.
+menu_update_terminal_size() {
+   local size lines columns
+
+   size=$(stty size 2>/dev/null) || size=""
+   lines=${size% *}
+   columns=${size#* }
+   if [[ ! "$lines" =~ ^[1-9][0-9]*$ ]]; then
+      lines=$(tput lines 2>/dev/null) || lines=""
+      [[ "$lines" =~ ^[1-9][0-9]*$ ]] || lines=24
+   fi
+   if [[ ! "$columns" =~ ^[1-9][0-9]*$ ]]; then
+      columns=$(tput cols 2>/dev/null) || columns=""
+      [[ "$columns" =~ ^[1-9][0-9]*$ ]] || columns=80
+   fi
+   menu_terminal_lines=$lines
+   menu_terminal_columns=$columns
+   menu_terminal_size_known=1
+}
+
+# Store the menu height in the named variable; MENU_HEIGHT overrides the cached terminal size.
+menu_terminal_rows_into() {
+   local _mtr_rows="${MENU_HEIGHT-}"
+
+   if [[ "$_mtr_rows" =~ ^[0-9]+$ ]] && ((_mtr_rows > 0)); then
+      printf -v "$1" '%d' "$_mtr_rows"
       return
    fi
 
-   rows=$(tput lines 2>/dev/null) || rows=24
-   [[ "$rows" =~ ^[0-9]+$ ]] || rows=24
+   ((menu_terminal_size_known)) || menu_update_terminal_size
+   printf -v "$1" '%d' "$menu_terminal_lines"
+}
+
+# Print the menu height, querying the terminal afresh unless MENU_HEIGHT overrides it.
+menu_terminal_rows() {
+   local rows
+   menu_terminal_size_known=0
+   menu_terminal_rows_into rows
    printf '%d' "$rows"
 }
 
@@ -305,63 +360,75 @@ menu_prepare_layout() {
    local -i item_index
    local -i item_length
    local -i rows
-   local -i header_length
+   local label footer
 
-   local -i footer_length
-
-   rows=$(menu_terminal_rows)
+   menu_terminal_rows_into rows
    max_options=$((rows - 8))
    ((max_options < 1)) && max_options=1
 
    content_width=0
    for ((item_index = 0; item_index < ${#menu_labels[@]}; item_index++)); do
-      item_length=$(slen "$(menu_display_label "$item_index")")
+      menu_display_label_into label "$item_index"
+      stripped_length_into item_length "$label"
       ((item_length > content_width)) && content_width=$item_length
    done
 
-   header_length=$(slen "$menu_header")
-   ((header_length > content_width)) && content_width=$header_length
-   footer_length=$(slen "$(menu_footer)")
-   ((footer_length > content_width)) && content_width=$footer_length
+   stripped_length_into item_length "$menu_header"
+   ((item_length > content_width)) && content_width=$item_length
+   menu_footer_into footer
+   stripped_length_into item_length "$footer"
+   ((item_length > content_width)) && content_width=$item_length
    menu_width=$((content_width + 2 + (${#menu_tab} * 2)))
    opt_left=$((1 + ${#menu_tab}))
+
+   menu_resolve_color_into menu_border_color "${settings[MENU_BORDER_COLOR]:-FG_DEFAULT}"
+   menu_resolve_color_into menu_pointer_color "${settings[MENU_POINTER_COLOR]:-FG_DEFAULT}"
+   menu_pointer="${settings[MENU_POINTER_TYPE]:->}"
 }
 
 # Render the full menu without changing terminal state.
 menu_render() {
    menu_prepare_layout
 
-   local border_color
    local vertical horizontal top_left top_right middle_left middle_right bottom_left bottom_right
-   local empty_line label
+   local border_left border_right empty_line divider label padded footer frame
    local -i item_index
    local -i end_index=$((top_option + max_options - 1))
 
-   border_color=$(menu_resolve_color "${settings[MENU_BORDER_COLOR]:-FG_DEFAULT}")
-   vertical=$(menu_border_char 1010)
-   horizontal=$(menu_border_char 0101)
-   top_left=$(menu_border_char 0110)
-   top_right=$(menu_border_char 0011)
-   middle_left=$(menu_border_char 1110)
-   middle_right=$(menu_border_char 1011)
-   bottom_left=$(menu_border_char 1100)
-   bottom_right=$(menu_border_char 1001)
-   empty_line="${border_color}$(pad_center "$vertical" "$vertical" "$menu_width")${FG_DEFAULT}"
+   menu_border_char_into vertical 1010
+   menu_border_char_into horizontal 0101
+   menu_border_char_into top_left 0110
+   menu_border_char_into top_right 0011
+   menu_border_char_into middle_left 1110
+   menu_border_char_into middle_right 1011
+   menu_border_char_into bottom_left 1100
+   menu_border_char_into bottom_right 1001
+   border_left="${menu_border_color}${vertical}${FG_DEFAULT}${menu_tab}"
+   border_right="${menu_tab}${menu_border_color}${vertical}${FG_DEFAULT}"
+   pad_center_into empty_line "$vertical" "$vertical" "$menu_width"
+   pad_center_into divider "$middle_left" "$middle_right" "$menu_width" "$horizontal"
 
-   printf '%s\n' "${border_color}$(pad_center "$top_left" "$top_right" "$menu_width" "$horizontal")${FG_DEFAULT}"
-   printf '%s\n' "${border_color}${vertical}${FG_DEFAULT}${menu_tab}$(pad_sides "$menu_header" "$content_width")${menu_tab}${border_color}${vertical}${FG_DEFAULT}"
-   printf '%s\n' "${border_color}$(pad_center "$middle_left" "$middle_right" "$menu_width" "$horizontal")${FG_DEFAULT}"
-   printf '%s\n' "$empty_line"
+   pad_center_into padded "$top_left" "$top_right" "$menu_width" "$horizontal"
+   frame="${menu_border_color}${padded}${FG_DEFAULT}"$'\n'
+   pad_sides_into padded "$menu_header" "$content_width"
+   frame+="${border_left}${padded}${border_right}"$'\n'
+   frame+="${menu_border_color}${divider}${FG_DEFAULT}"$'\n'
+   frame+="${menu_border_color}${empty_line}${FG_DEFAULT}"$'\n'
 
    for ((item_index = top_option; item_index <= end_index; item_index++)); do
-      label=$(menu_display_label "$item_index")
-      printf '%s\n' "${border_color}${vertical}${FG_DEFAULT}${menu_tab}$(pad_right "$label" "$content_width")${menu_tab}${border_color}${vertical}${FG_DEFAULT}"
+      menu_display_label_into label "$item_index"
+      pad_right_into padded "$label" "$content_width"
+      frame+="${border_left}${padded}${border_right}"$'\n'
    done
 
-   printf '%s\n' "$empty_line"
-   printf '%s\n' "${border_color}$(pad_center "$middle_left" "$middle_right" "$menu_width" "$horizontal")${FG_DEFAULT}"
-   printf '%s\n' "${border_color}${vertical}${FG_DEFAULT}${menu_tab}$(pad_right "${DIM}$(menu_footer)${RESET}" "$content_width")${menu_tab}${border_color}${vertical}${FG_DEFAULT}"
-   printf '%s' "${border_color}$(pad_center "$bottom_left" "$bottom_right" "$menu_width" "$horizontal")${FG_DEFAULT}"
+   frame+="${menu_border_color}${empty_line}${FG_DEFAULT}"$'\n'
+   frame+="${menu_border_color}${divider}${FG_DEFAULT}"$'\n'
+   menu_footer_into footer
+   pad_right_into padded "${DIM}${footer}${RESET}" "$content_width"
+   frame+="${border_left}${padded}${border_right}"$'\n'
+   pad_center_into padded "$bottom_left" "$bottom_right" "$menu_width" "$horizontal"
+   frame+="${menu_border_color}${padded}${FG_DEFAULT}"
+   printf '%s' "$frame"
 }
 
 menu_build() {
@@ -369,9 +436,9 @@ menu_build() {
    previous_index=0
    top_option=0
    previous_top_option=0
-   menu_prepare_layout
 
    if [[ -t 1 ]]; then
+      menu_update_terminal_size
       clear
       tput civis 2>/dev/null || true
    fi
@@ -379,24 +446,19 @@ menu_build() {
    menu_render
 }
 
+# Redraw one visible option in place with a single write.
 menu_draw_option() {
    local -i item_index="$1"
-   local -i visual_index=$((item_index - top_option))
-   local label
-   local pointer_color pointer
+   local -i row=$((opt_top + item_index - top_option + 1))
+   local label padded
 
-   label=$(menu_display_label "$item_index")
-   pointer_color=$(menu_resolve_color "${settings[MENU_POINTER_COLOR]:-FG_DEFAULT}")
-   pointer="${settings[MENU_POINTER_TYPE]:->}"
-
+   menu_display_label_into label "$item_index"
    if ((item_index == selected_index)); then
-      tput cup $((opt_top + visual_index)) $((opt_left - 2))
-      printf '%s' "${pointer_color}${pointer}${FG_DEFAULT} $(pad_right "${INVERSE}${label}${INVERSE_OFF}" "$content_width")"
+      pad_right_into padded "${INVERSE}${label}${INVERSE_OFF}" "$content_width"
+      printf '\033[%d;%dH%s %s' "$row" "$((opt_left - 1))" "${menu_pointer_color}${menu_pointer}${FG_DEFAULT}" "$padded"
    else
-      tput cup $((opt_top + visual_index)) $((opt_left - 2))
-      printf ' '
-      tput cup $((opt_top + visual_index)) "$opt_left"
-      printf '%s' "$(pad_right "$label" "$content_width")"
+      pad_right_into padded "$label" "$content_width"
+      printf '\033[%d;%dH  %s' "$row" "$((opt_left - 1))" "$padded"
    fi
 }
 

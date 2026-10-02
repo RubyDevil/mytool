@@ -1,26 +1,49 @@
 #!/usr/bin/env bash
 
+# Helpers named *_into store their result in the variable named by their first argument instead of
+# printing it, so render paths never fork. Each prefixes its locals uniquely (e.g. _sai_) so the
+# printf -v target cannot be shadowed; callers must not pass names with those prefixes.
+
+# Store a string with SGR color and style sequences removed in the named variable.
+strip_ansi_into() {
+   local _sai_text="${2-}"
+   local _sai_escape_pattern=$'^(.*)\033\[[0-9;:]*m(.*)$'
+   local _sai_literal_pattern='^(.*)\\(e|x1b|033)\[[0-9;:]*m(.*)$'
+
+   if [[ "$_sai_text" == *$'\033'* ]]; then
+      while [[ "$_sai_text" =~ $_sai_escape_pattern ]]; do
+         _sai_text=${BASH_REMATCH[1]}${BASH_REMATCH[2]}
+      done
+   fi
+   if [[ "$_sai_text" == *\\* ]]; then
+      while [[ "$_sai_text" =~ $_sai_literal_pattern ]]; do
+         _sai_text=${BASH_REMATCH[1]}${BASH_REMATCH[3]}
+      done
+   fi
+
+   printf -v "$1" '%s' "$_sai_text"
+}
+
 # Remove SGR color and style sequences from a string.
 strip_ansi() {
-   local text="${1-}"
-   local escape_pattern=$'^(.*)\033\[[0-9;:]*m(.*)$'
-   local literal_pattern='^(.*)\\(e|x1b|033)\[[0-9;:]*m(.*)$'
-
-   while [[ "$text" =~ $escape_pattern ]]; do
-      text=${BASH_REMATCH[1]}${BASH_REMATCH[2]}
-   done
-   while [[ "$text" =~ $literal_pattern ]]; do
-      text=${BASH_REMATCH[1]}${BASH_REMATCH[3]}
-   done
-
-   printf '%s' "$text"
+   local stripped
+   strip_ansi_into stripped "${1-}"
+   printf '%s' "$stripped"
 }
+
+# Store the visible character length of a string in the named variable.
+stripped_length_into() {
+   local _sli_stripped
+   strip_ansi_into _sli_stripped "${2-}"
+   printf -v "$1" '%d' "${#_sli_stripped}"
+}
+slen_into() { stripped_length_into "$@"; }
 
 # Return the visible character length of a string.
 stripped_length() {
-   local stripped
-   stripped=$(strip_ansi "${1-}")
-   printf '%d' "${#stripped}"
+   local length
+   stripped_length_into length "${1-}"
+   printf '%d' "$length"
 }
 slen() { stripped_length "$@"; }
 
