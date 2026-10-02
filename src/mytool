@@ -158,6 +158,34 @@ task_vps_print_ssh_config() {
    wait_for_key
 }
 
+task_vps_setup_tailscale() {
+   local hostname
+   local enable_ssh=0
+   local tailscale_ip
+
+   clear
+   if ! vps_setup_tailscale_installed; then
+      print_error 'Tailscale is not installed. Install it from Software Management first.'
+      wait_for_key
+      return
+   fi
+   IFS= read -r -p 'Tailscale machine name (optional): ' hostname
+   if [[ -n "$hostname" ]] && ! vps_setup_validate_tailscale_hostname "$hostname"; then
+      print_error 'Invalid name. Use letters, digits, and hyphens (up to 63 characters).'
+      wait_for_key
+      return
+   fi
+   prompt_confirm 'Enable Tailscale SSH? [y/N] ' && enable_ssh=1
+   printf '\nOpen the login URL printed below to add this server to your tailnet.\n\n'
+   if vps_setup_tailscale_up "$enable_ssh" "$hostname"; then
+      tailscale_ip=$(vps_setup_tailscale_ip)
+      print_success "Tailscale is connected${tailscale_ip:+ at $tailscale_ip}."
+   else
+      print_error 'Tailscale setup did not complete.'
+   fi
+   wait_for_key
+}
+
 task_vps_set_reinstall_mode() {
    vps_reinstall_selected=1
 }
@@ -640,6 +668,7 @@ build_menu_vps_security() {
    menu_add 'Change SSH port' task_vps_change_ssh_port
    menu_add "${RED}Disable SSH password login${RESET}" task_vps_disable_password_login
    menu_add 'Generate config for easy SSH login' task_vps_print_ssh_config
+   menu_add 'Setup Tailscale' task_vps_setup_tailscale
 }
 
 build_menu_vps_installer() {
@@ -675,6 +704,7 @@ build_menu_vps_software() {
    menu_add "Install NVM ${DIM}(Node Version Manager)${RESET}" task_vps_install_software NVM nvm
    menu_add 'Install PM2' task_vps_install_software PM2 pm2
    menu_add "Install MongoDB ${DIM}(mongod, mongosh, database tools)${RESET}" task_vps_install_software MongoDB mongodb
+   menu_add "Install Tailscale ${DIM}(private VPN network)${RESET}" task_vps_install_software Tailscale tailscale
 }
 
 build_menu_settings_choices() {

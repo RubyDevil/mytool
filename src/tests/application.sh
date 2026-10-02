@@ -29,6 +29,7 @@ test_run 'Build security menu' menu_invoke 1
 test_assert_equal 'Build security menu header' 'Security Setup' "$menu_header"
 test_assert_equal 'Enable security multi-select' '1' "$menu_multi_select"
 test_assert_equal 'Keep destructive SSH action red' 'Disable SSH password login' "$(strip_ansi "${menu_labels[3]}")"
+test_assert_equal 'Offer Tailscale setup' 'Setup Tailscale:task_vps_setup_tailscale' "$(strip_ansi "${menu_labels[5]}"):${menu_callbacks[5]}"
 test_assert_equal 'Go back from security menu' 'build_menu_tools' "$menu_back_callback"
 
 build_menu_vps_software
@@ -41,6 +42,8 @@ test_assert_equal 'Preselect Node.js' '1' "${menu_selected[4]}"
 test_assert_equal 'Describe NVM' 'Install NVM (Node Version Manager)' "$(strip_ansi "${menu_labels[5]}")"
 test_assert_equal 'Describe MongoDB' 'Install MongoDB (mongod, mongosh, database tools)' "$(strip_ansi "${menu_labels[7]}")"
 test_assert_equal 'Keep MongoDB optional' '0' "${menu_selected[7]:-0}"
+test_assert_equal 'Describe Tailscale' 'Install Tailscale (private VPN network)' "$(strip_ansi "${menu_labels[8]}")"
+test_assert_equal 'Keep Tailscale optional' '0' "${menu_selected[8]:-0}"
 test_assert_equal 'Go back from software menu' 'build_menu_tools' "$menu_back_callback"
 test_assert_equal 'Clear before software batch' 'task_vps_software_start' "$menu_selected_start_callback"
 test_assert_equal 'Pause after software batch' 'task_vps_software_complete' "$menu_selected_complete_callback"

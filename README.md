@@ -13,6 +13,10 @@ configured Nginx directory and reload Nginx.
 Installing MongoDB adds the official MongoDB 9.0 APT repository and requires Ubuntu or Debian on
 amd64 (with AVX CPU support) or arm64.
 
+Installing Tailscale adds the official Tailscale stable APT repository and requires Ubuntu or
+Debian. **Setup Tailscale** in Security Setup then runs `tailscale up` (optionally with a machine
+name and Tailscale SSH) and prints a login URL to join the server to your tailnet.
+
 ## Run
 
 ```bash
