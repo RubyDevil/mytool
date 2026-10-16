@@ -1,0 +1,39 @@
+#!/bin/bash
+# MyTool v2 - Completely redesigned menu system
+
+# Get script directory
+_mytool_script_dir=$(dirname "${BASH_SOURCE[0]}")
+
+# Source legacy dependencies (for compatibility)
+source "$_mytool_script_dir/lib/ansi.sh"
+source "$_mytool_script_dir/lib/settings.sh"
+
+# Source v2 menu system
+source "$_mytool_script_dir/v2/core/menu_engine.sh"
+source "$_mytool_script_dir/v2/menus/main_menu.sh"
+
+# Configuration
+menu_configure "border_style" "light"
+menu_configure "max_width" "60"
+menu_configure "max_height" "20"
+menu_configure "scroll_margin" "2"
+
+# Load settings (if they exist)
+settings_load_from_file ""
+
+# Welcome message
+echo -e "${BLUE}┌─────────────────────────────────────────────┐${RESET}"
+echo -e "${BLUE}│${RESET}           ${BOLD}MyTool v2.0${RESET} - Menu System        ${BLUE}│${RESET}"
+echo -e "${BLUE}└─────────────────────────────────────────────────┘${RESET}"
+echo -e "${DIM}Redesigned from the ground up with:${RESET}"
+echo -e "  • Custom keybinds (no more Exit/Back buttons)"
+echo -e "  • Optimized rendering and scrolling"
+echo -e "  • Recursive menu definitions"
+echo -e "  • Modern interface"
+echo ""
+echo -e "${DIM}Press any key to start...${RESET}"
+read -rsn1
+clear
+
+# Start the menu system
+menu_start menu_main
