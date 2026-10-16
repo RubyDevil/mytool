@@ -424,32 +424,32 @@ settings_display_key_info() {
 }
 
 task_add_reverse_proxy() {
-   local domain port
+   local domain destination
 
    clear
    printf '%sAdd a new reverse proxy configuration%s\n\n' "$DIM" "$RESET"
-   IFS= read -r -p 'Enter domain: ' domain
+   IFS= read -r -p 'Source domain: ' domain
 
    if ! reverse_proxy_validate_domain "$domain"; then
       print_error "Invalid domain: $domain"
       wait_for_key
       return
    fi
-   if [[ -n "${domains_and_ports[$domain]+set}" ]]; then
+   if [[ -n "${reverse_proxy_destinations[$domain]+set}" ]]; then
       print_error 'Domain already exists.'
       wait_for_key
       return
    fi
 
-   IFS= read -r -p 'Enter port: ' port
-   if ! reverse_proxy_validate_port "$port"; then
-      print_error "Invalid port: $port. Enter a number between 1 and 65535."
+   IFS= read -r -p 'Destination (host[:port], e.g. localhost:3000 or 10.0.0.5:8080): ' destination
+   if ! reverse_proxy_validate_destination "$destination"; then
+      print_error "Invalid destination: $destination. Use a domain or IP address, optionally followed by :port."
       wait_for_key
       return
    fi
 
    printf '\n%sSaving configuration and reloading Nginx...%s\n' "$DIM" "$RESET"
-   if ! reverse_proxy_apply_config "$domain" "$port"; then
+   if ! reverse_proxy_apply_config "$domain" "$destination"; then
       print_error 'The configuration was not applied; the previous Nginx state was restored.'
       wait_for_key
       return
@@ -463,27 +463,27 @@ task_add_reverse_proxy() {
 
 task_modify_reverse_proxy() {
    local domain="$1"
-   local port="${domains_and_ports[$domain]}"
-   local new_port
+   local destination="${reverse_proxy_destinations[$domain]}"
+   local new_destination
 
    clear
    printf '%sModify reverse proxy configuration for %s%s\n\n' "$DIM" "$domain" "$RESET"
-   IFS= read -r -p "Enter port [$port]: " new_port
-   new_port=${new_port:-$port}
+   IFS= read -r -p "Destination (host[:port]) [$destination]: " new_destination
+   new_destination=${new_destination:-$destination}
 
-   if ! reverse_proxy_validate_port "$new_port"; then
-      print_error "Invalid port: $new_port. Enter a number between 1 and 65535."
+   if ! reverse_proxy_validate_destination "$new_destination"; then
+      print_error "Invalid destination: $new_destination. Use a domain or IP address, optionally followed by :port."
       wait_for_key
       return
    fi
-   if [[ "$new_port" == "$port" ]]; then
-      print_error 'The new port is the same as the current port.'
+   if [[ "$new_destination" == "$destination" ]]; then
+      print_error 'The new destination is the same as the current destination.'
       wait_for_key
       return
    fi
 
    printf '\n%sSaving configuration and reloading Nginx...%s\n' "$DIM" "$RESET"
-   if ! reverse_proxy_apply_config "$domain" "$new_port"; then
+   if ! reverse_proxy_apply_config "$domain" "$new_destination"; then
       print_error 'The configuration was not applied; the previous Nginx state was restored.'
       wait_for_key
       return
@@ -766,11 +766,11 @@ build_menu_reverse_proxy() {
    menu_set_back build_menu_tools
    menu_add "${GREEN}Add new reverse proxy${RESET}" task_add_reverse_proxy
 
-   mapfile -t domains < <(printf '%s\n' "${!domains_and_ports[@]}" | LC_ALL=C sort)
+   mapfile -t domains < <(printf '%s\n' "${!reverse_proxy_destinations[@]}" | LC_ALL=C sort)
    for domain in "${domains[@]}"; do
       reverse_proxy_validate_domain "$domain" || continue
-      reverse_proxy_validate_port "${domains_and_ports[$domain]}" || continue
-      menu_add "${domain} ${DIM}(port: ${domains_and_ports[$domain]})${RESET}" build_menu_reverse_proxy "$domain"
+      reverse_proxy_validate_destination "${reverse_proxy_destinations[$domain]}" || continue
+      menu_add "${domain} ${DIM}-> ${reverse_proxy_destinations[$domain]}${RESET}" build_menu_reverse_proxy "$domain"
    done
 }
 

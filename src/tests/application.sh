@@ -132,13 +132,13 @@ test_assert_equal 'Keep free-text setting modifier' 'Modify' "$(strip_ansi "${me
 temporary_dir=$(mktemp -d)
 trap 'rm -rf -- "$temporary_dir"' EXIT
 settings[NGINX_CONFIG_DIR]="$temporary_dir"
-reverse_proxy_save_config z.example 9000
-reverse_proxy_save_config a.example 8000
-domains_and_ports[invalid]=invalid
+reverse_proxy_save_config z.example localhost:9000
+reverse_proxy_save_config a.example 10.0.0.5:8000
+reverse_proxy_destinations[invalid]=invalid
 build_menu_reverse_proxy
 test_assert_equal 'Build proxy menu items' '3' "${#menu_labels[@]}"
-test_assert_equal 'Sort proxy entries' 'a.example (port: 8000)' "$(strip_ansi "${menu_labels[1]}")"
-test_assert_equal 'Skip invalid proxy cache entry' 'z.example (port: 9000)' "$(strip_ansi "${menu_labels[2]}")"
+test_assert_equal 'Sort proxy entries' 'a.example -> 10.0.0.5:8000' "$(strip_ansi "${menu_labels[1]}")"
+test_assert_equal 'Skip invalid proxy cache entry' 'z.example -> localhost:9000' "$(strip_ansi "${menu_labels[2]}")"
 test_assert_equal 'Go back from proxies to Tools' 'build_menu_tools' "$menu_back_callback"
 
 MENU_HEIGHT=10

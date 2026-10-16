@@ -7,7 +7,7 @@ if ! declare -p settings &>/dev/null; then
 fi
 unset reverse_proxy_core_dir
 
-declare -gA domains_and_ports=()
+declare -gA reverse_proxy_destinations=()
 declare -gA reverse_proxy_files=()
 
 reverse_proxy_run_config_command() {
@@ -44,6 +44,26 @@ reverse_proxy_validate_port() {
    [[ "$port" =~ ^[0-9]{1,5}$ ]] && ((10#$port >= 1 && 10#$port <= 65535))
 }
 
+# A destination is host[:port], where host is a domain, an IPv4 address or a
+# bracketed IPv6 address. Without a port, Nginx uses the default HTTP port.
+reverse_proxy_validate_destination() {
+   local destination="${1-}"
+   local host port=""
+
+   if [[ "$destination" =~ ^\[([0-9A-Fa-f:.]+)\](:([0-9]+))?$ ]]; then
+      port="${BASH_REMATCH[3]}"
+      [[ "${BASH_REMATCH[1]}" == *:* ]] || return 1
+   elif [[ "$destination" =~ ^([^:]+)(:([0-9]+))?$ ]]; then
+      host="${BASH_REMATCH[1]}"
+      port="${BASH_REMATCH[3]}"
+      reverse_proxy_validate_domain "$host" || return 1
+   else
+      return 1
+   fi
+
+   [[ -z "$port" ]] || reverse_proxy_validate_port "$port"
+}
+
 reverse_proxy_config_path() {
    local domain="$1"
    reverse_proxy_validate_domain "$domain" || return 2
@@ -52,7 +72,7 @@ reverse_proxy_config_path() {
 
 reverse_proxy_parse_config() {
    local file="$1"
-   local domain port
+   local domain destination
 
    domain=$(awk '
       $1 == "server_name" {
@@ -62,29 +82,29 @@ reverse_proxy_parse_config() {
          exit
       }
    ' "$file")
-   port=$(awk '
-      /^[[:space:]]*proxy_pass[[:space:]]+http:\/\/(localhost|127\.[0-9]+\.[0-9]+\.[0-9]+):[0-9]+[[:space:]]*;/ {
+   destination=$(awk '
+      /^[[:space:]]*proxy_pass[[:space:]]+http:\/\/[^[:space:];\/]+[[:space:]]*;/ {
          value = $0
-         sub(/^.*:/, "", value)
-         sub(/[;[:space:]].*$/, "", value)
+         sub(/^[[:space:]]*proxy_pass[[:space:]]+http:\/\//, "", value)
+         sub(/[[:space:]]*;.*$/, "", value)
          print value
          exit
       }
    ' "$file")
 
    reverse_proxy_validate_domain "$domain" || return 1
-   reverse_proxy_validate_port "$port" || return 1
-   printf '%s\t%s' "$domain" "$port"
+   reverse_proxy_validate_destination "$destination" || return 1
+   printf '%s\t%s' "$domain" "$destination"
 }
 
 reverse_proxy_load_configs() {
    local directory="${settings[NGINX_CONFIG_DIR]}"
-   local file parsed domain port
+   local file parsed domain destination
    local -a files=()
    local -i status=0
    local nullglob_was_set=0
 
-   domains_and_ports=()
+   reverse_proxy_destinations=()
    reverse_proxy_files=()
 
    if [[ ! -d "$directory" ]]; then
@@ -104,8 +124,8 @@ reverse_proxy_load_configs() {
          continue
       fi
 
-      IFS=$'\t' read -r domain port <<<"$parsed"
-      domains_and_ports["$domain"]="$port"
+      IFS=$'\t' read -r domain destination <<<"$parsed"
+      reverse_proxy_destinations["$domain"]="$destination"
       reverse_proxy_files["$domain"]="$file"
    done
 
@@ -114,17 +134,17 @@ reverse_proxy_load_configs() {
 
 reverse_proxy_render_config() {
    local domain="$1"
-   local port="$2"
+   local destination="$2"
 
    reverse_proxy_validate_domain "$domain" || return 2
-   reverse_proxy_validate_port "$port" || return 2
+   reverse_proxy_validate_destination "$destination" || return 2
 
    printf 'server {\n'
    printf '    listen 80;\n'
    printf '    server_name %s;\n' "$domain"
    printf '\n'
    printf '    location / {\n'
-   printf '        proxy_pass http://localhost:%s;\n' "$port"
+   printf '        proxy_pass http://%s;\n' "$destination"
    printf '        proxy_set_header Host $host;\n'
    printf '        proxy_set_header X-Real-IP $remote_addr;\n'
    printf '        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n'
@@ -135,7 +155,7 @@ reverse_proxy_render_config() {
 
 reverse_proxy_save_config() {
    local domain="$1"
-   local port="$2"
+   local destination="$2"
    local directory="${settings[NGINX_CONFIG_DIR]}"
    local config_file temporary_file privileged_temporary_file
 
@@ -143,15 +163,15 @@ reverse_proxy_save_config() {
       printf 'Invalid domain: %s\n' "$domain" >&2
       return 2
    }
-   reverse_proxy_validate_port "$port" || {
-      printf 'Invalid port: %s\n' "$port" >&2
+   reverse_proxy_validate_destination "$destination" || {
+      printf 'Invalid destination: %s\n' "$destination" >&2
       return 2
    }
    reverse_proxy_ensure_config_directory || return 1
 
    config_file=$(reverse_proxy_config_path "$domain") || return
    temporary_file=$(mktemp) || return 1
-   if ! (umask 022; reverse_proxy_render_config "$domain" "$port" >"$temporary_file"); then
+   if ! (umask 022; reverse_proxy_render_config "$domain" "$destination" >"$temporary_file"); then
       rm -f -- "$temporary_file"
       return 1
    fi
@@ -193,7 +213,7 @@ reverse_proxy_reload_nginx() {
 
 reverse_proxy_apply_config() {
    local domain="$1"
-   local port="$2"
+   local destination="$2"
    local config_file backup_file=""
 
    config_file=$(reverse_proxy_config_path "$domain") || return
@@ -205,7 +225,7 @@ reverse_proxy_apply_config() {
       }
    fi
 
-   if ! reverse_proxy_save_config "$domain" "$port"; then
+   if ! reverse_proxy_save_config "$domain" "$destination"; then
       [[ -n "$backup_file" ]] && rm -f -- "$backup_file"
       return 1
    fi
@@ -221,7 +241,7 @@ reverse_proxy_apply_config() {
    fi
 
    [[ -n "$backup_file" ]] && rm -f -- "$backup_file"
-   domains_and_ports["$domain"]="$port"
+   reverse_proxy_destinations["$domain"]="$destination"
    reverse_proxy_files["$domain"]="$config_file"
 }
 
@@ -242,6 +262,6 @@ reverse_proxy_remove_config() {
    fi
 
    rm -f -- "$temporary_file"
-   unset 'domains_and_ports[$domain]'
+   unset 'reverse_proxy_destinations[$domain]'
    unset 'reverse_proxy_files[$domain]'
 }
