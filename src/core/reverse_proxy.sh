@@ -9,6 +9,8 @@ unset reverse_proxy_core_dir
 
 declare -gA reverse_proxy_destinations=()
 declare -gA reverse_proxy_files=()
+# domain -> "certificate<TAB>key" for domains served over HTTPS; absent for HTTP only.
+declare -gA reverse_proxy_tls=()
 
 reverse_proxy_run_config_command() {
    local directory="${settings[NGINX_CONFIG_DIR]}"
@@ -64,6 +66,25 @@ reverse_proxy_validate_destination() {
    [[ -z "$port" ]] || reverse_proxy_validate_port "$port"
 }
 
+# A certificate/key path is interpolated into an Nginx config, so allow only a
+# conservative absolute-path character set with no traversal components.
+reverse_proxy_validate_tls_path() {
+   local path="${1-}"
+   [[ -n "$path" ]] && ((${#path} <= 4096)) &&
+      [[ "$path" =~ ^/[A-Za-z0-9._/@+-]+$ ]] &&
+      [[ "$path" != *'/../'* && "$path" != */.. ]]
+}
+
+reverse_proxy_default_certificate_path() {
+   reverse_proxy_validate_domain "$1" || return 2
+   printf '/etc/letsencrypt/live/%s/fullchain.pem' "$1"
+}
+
+reverse_proxy_default_certificate_key_path() {
+   reverse_proxy_validate_domain "$1" || return 2
+   printf '/etc/letsencrypt/live/%s/privkey.pem' "$1"
+}
+
 reverse_proxy_config_path() {
    local domain="$1"
    reverse_proxy_validate_domain "$domain" || return 2
@@ -72,7 +93,7 @@ reverse_proxy_config_path() {
 
 reverse_proxy_parse_config() {
    local file="$1"
-   local domain destination
+   local domain destination certificate certificate_key
 
    domain=$(awk '
       $1 == "server_name" {
@@ -92,20 +113,45 @@ reverse_proxy_parse_config() {
       }
    ' "$file")
 
+   certificate=$(awk '
+      $1 == "ssl_certificate" {
+         value = $2
+         sub(/;.*/, "", value)
+         print value
+         exit
+      }
+   ' "$file")
+   certificate_key=$(awk '
+      $1 == "ssl_certificate_key" {
+         value = $2
+         sub(/;.*/, "", value)
+         print value
+         exit
+      }
+   ' "$file")
+
    reverse_proxy_validate_domain "$domain" || return 1
    reverse_proxy_validate_destination "$destination" || return 1
-   printf '%s\t%s' "$domain" "$destination"
+   if [[ -n "$certificate" || -n "$certificate_key" ]]; then
+      reverse_proxy_validate_tls_path "$certificate" || return 1
+      reverse_proxy_validate_tls_path "$certificate_key" || return 1
+   else
+      certificate=- certificate_key=-
+   fi
+   # Fields are never empty so that a tab-delimited read keeps them aligned.
+   printf '%s	%s	%s	%s' "$domain" "$destination" "$certificate" "$certificate_key"
 }
 
 reverse_proxy_load_configs() {
    local directory="${settings[NGINX_CONFIG_DIR]}"
-   local file parsed domain destination
+   local file parsed domain destination certificate certificate_key
    local -a files=()
    local -i status=0
    local nullglob_was_set=0
 
    reverse_proxy_destinations=()
    reverse_proxy_files=()
+   reverse_proxy_tls=()
 
    if [[ ! -d "$directory" ]]; then
       printf 'Nginx configuration directory does not exist: %s\n' "$directory" >&2
@@ -124,9 +170,12 @@ reverse_proxy_load_configs() {
          continue
       fi
 
-      IFS=$'\t' read -r domain destination <<<"$parsed"
+      IFS=$'	' read -r domain destination certificate certificate_key <<<"$parsed"
       reverse_proxy_destinations["$domain"]="$destination"
       reverse_proxy_files["$domain"]="$file"
+      if [[ "$certificate" != - ]]; then
+         reverse_proxy_tls["$domain"]="$certificate"$'\t'"$certificate_key"
+      fi
    done
 
    return "$status"
@@ -135,13 +184,40 @@ reverse_proxy_load_configs() {
 reverse_proxy_render_config() {
    local domain="$1"
    local destination="$2"
+   local certificate="${3-}"
+   local certificate_key="${4-}"
 
    reverse_proxy_validate_domain "$domain" || return 2
    reverse_proxy_validate_destination "$destination" || return 2
 
-   printf 'server {\n'
-   printf '    listen 80;\n'
-   printf '    server_name %s;\n' "$domain"
+   if [[ -n "$certificate" || -n "$certificate_key" ]]; then
+      reverse_proxy_validate_tls_path "$certificate" || return 2
+      reverse_proxy_validate_tls_path "$certificate_key" || return 2
+
+      printf 'server {\n'
+      printf '    listen 80;\n'
+      printf '    server_name %s;\n' "$domain"
+      printf '\n'
+      printf '    location /.well-known/acme-challenge/ {\n'
+      printf '        root /var/www/html;\n'
+      printf '    }\n'
+      printf '\n'
+      printf '    location / {\n'
+      printf '        return 301 https://$host$request_uri;\n'
+      printf '    }\n'
+      printf '}\n'
+      printf '\n'
+      printf 'server {\n'
+      printf '    listen 443 ssl;\n'
+      printf '    server_name %s;\n' "$domain"
+      printf '\n'
+      printf '    ssl_certificate %s;\n' "$certificate"
+      printf '    ssl_certificate_key %s;\n' "$certificate_key"
+   else
+      printf 'server {\n'
+      printf '    listen 80;\n'
+      printf '    server_name %s;\n' "$domain"
+   fi
    printf '\n'
    printf '    location / {\n'
    printf '        proxy_pass http://%s;\n' "$destination"
@@ -156,6 +232,8 @@ reverse_proxy_render_config() {
 reverse_proxy_save_config() {
    local domain="$1"
    local destination="$2"
+   local certificate="${3-}"
+   local certificate_key="${4-}"
    local directory="${settings[NGINX_CONFIG_DIR]}"
    local config_file temporary_file privileged_temporary_file
 
@@ -167,11 +245,18 @@ reverse_proxy_save_config() {
       printf 'Invalid destination: %s\n' "$destination" >&2
       return 2
    }
+   if [[ -n "$certificate" || -n "$certificate_key" ]]; then
+      reverse_proxy_validate_tls_path "$certificate" &&
+         reverse_proxy_validate_tls_path "$certificate_key" || {
+         printf 'Invalid certificate or key path.\n' >&2
+         return 2
+      }
+   fi
    reverse_proxy_ensure_config_directory || return 1
 
    config_file=$(reverse_proxy_config_path "$domain") || return
    temporary_file=$(mktemp) || return 1
-   if ! (umask 022; reverse_proxy_render_config "$domain" "$destination" >"$temporary_file"); then
+   if ! (umask 022; reverse_proxy_render_config "$domain" "$destination" "$certificate" "$certificate_key" >"$temporary_file"); then
       rm -f -- "$temporary_file"
       return 1
    fi
@@ -214,6 +299,8 @@ reverse_proxy_reload_nginx() {
 reverse_proxy_apply_config() {
    local domain="$1"
    local destination="$2"
+   local certificate="${3-}"
+   local certificate_key="${4-}"
    local config_file backup_file=""
 
    config_file=$(reverse_proxy_config_path "$domain") || return
@@ -225,7 +312,7 @@ reverse_proxy_apply_config() {
       }
    fi
 
-   if ! reverse_proxy_save_config "$domain" "$destination"; then
+   if ! reverse_proxy_save_config "$domain" "$destination" "$certificate" "$certificate_key"; then
       [[ -n "$backup_file" ]] && rm -f -- "$backup_file"
       return 1
    fi
@@ -243,6 +330,11 @@ reverse_proxy_apply_config() {
    [[ -n "$backup_file" ]] && rm -f -- "$backup_file"
    reverse_proxy_destinations["$domain"]="$destination"
    reverse_proxy_files["$domain"]="$config_file"
+   if [[ -n "$certificate" ]]; then
+      reverse_proxy_tls["$domain"]="$certificate"$'\t'"$certificate_key"
+   else
+      unset 'reverse_proxy_tls[$domain]'
+   fi
 }
 
 reverse_proxy_remove_config() {
@@ -264,4 +356,5 @@ reverse_proxy_remove_config() {
    rm -f -- "$temporary_file"
    unset 'reverse_proxy_destinations[$domain]'
    unset 'reverse_proxy_files[$domain]'
+   unset 'reverse_proxy_tls[$domain]'
 }

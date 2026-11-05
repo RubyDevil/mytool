@@ -61,4 +61,35 @@ test_run 'Delete config after successful reload' reverse_proxy_remove_config exa
 test_run 'Remove deleted file' test ! -e "$temporary_dir/example.com.conf"
 test_assert_equal 'Remove deleted cache entry' '0' "${#reverse_proxy_destinations[@]}"
 
+cert=/etc/letsencrypt/live/secure.example/fullchain.pem
+key=/etc/letsencrypt/live/secure.example/privkey.pem
+test_run 'Accept certificate path' reverse_proxy_validate_tls_path "$cert"
+test_assert_status 'Reject relative certificate path' 1 reverse_proxy_validate_tls_path 'cert.pem'
+test_assert_status 'Reject traversal certificate path' 1 reverse_proxy_validate_tls_path '/etc/../root/key.pem'
+test_assert_status 'Reject injection certificate path' 1 reverse_proxy_validate_tls_path '/etc/a.pem;include /x'
+test_assert_status 'Reject invalid certificate on save' 2 reverse_proxy_save_config secure.example localhost:8080 'bad path' "$key"
+test_assert_status 'Reject certificate without key' 2 reverse_proxy_save_config secure.example localhost:8080 "$cert"
+
+http_config=$(reverse_proxy_render_config plain.example localhost:8080)
+test_assert_equal 'Keep HTTP-only config without 443' '0' "$(grep -c 443 <<<"$http_config")"
+
+reverse_proxy_reload_nginx() { return 0; }
+test_run 'Apply HTTPS config' reverse_proxy_apply_config secure.example localhost:8080 "$cert" "$key"
+test_run 'Listen on 443' grep -q 'listen 443 ssl;' "$temporary_dir/secure.example.conf"
+test_run 'Write certificate' grep -q "ssl_certificate $cert;" "$temporary_dir/secure.example.conf"
+test_run 'Redirect HTTP to HTTPS' grep -q 'return 301 https://' "$temporary_dir/secure.example.conf"
+test_run 'Keep ACME challenge on HTTP' grep -q 'acme-challenge' "$temporary_dir/secure.example.conf"
+test_run 'Reload HTTPS configs' reverse_proxy_load_configs
+test_assert_equal 'Parse HTTPS destination' 'localhost:8080' "${reverse_proxy_destinations[secure.example]}"
+test_assert_equal 'Parse HTTPS certificate' "$cert"$'\t'"$key" "${reverse_proxy_tls[secure.example]}"
+
+reverse_proxy_reload_nginx() { return 1; }
+test_assert_status 'Report failed HTTPS to HTTP switch' 1 reverse_proxy_apply_config secure.example localhost:8080
+test_run 'Roll back to HTTPS config' grep -q 'listen 443 ssl;' "$temporary_dir/secure.example.conf"
+
+reverse_proxy_reload_nginx() { return 0; }
+test_run 'Switch back to HTTP only' reverse_proxy_apply_config secure.example localhost:8080
+test_run 'Drop 443 listener' bash -c '! grep -q 443 "$1"' _ "$temporary_dir/secure.example.conf"
+test_assert_equal 'Clear TLS cache entry' '0' "${#reverse_proxy_tls[@]}"
+
 test_finish

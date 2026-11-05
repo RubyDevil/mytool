@@ -423,8 +423,43 @@ settings_display_key_info() {
    printf 'Default value: %s\n' "${default_settings[$key]}"
 }
 
+# Asks whether to serve HTTPS and, if so, for the certificate and key paths.
+# Results go to the variables named by $2 and $3 (empty means HTTP only).
+# Optional $4/$5 are the current paths, used as defaults when editing.
+# Returns 1 on invalid input after printing an error.
+prompt_reverse_proxy_tls() {
+   local domain="$1"
+   local -n tls_certificate_result="$2"
+   local -n tls_key_result="$3"
+   local current_certificate="${4-}"
+   local current_key="${5-}"
+   local question='Serve HTTPS on port 443? [y/N] '
+   local default_certificate default_key
+
+   tls_certificate_result=''
+   tls_key_result=''
+   [[ -n "$current_certificate" ]] && question='Keep HTTPS enabled? [y/N] '
+   prompt_confirm "$question" || return 0
+
+   default_certificate=${current_certificate:-$(reverse_proxy_default_certificate_path "$domain")}
+   default_key=${current_key:-$(reverse_proxy_default_certificate_key_path "$domain")}
+
+   IFS= read -r -p "Certificate path [$default_certificate]: " tls_certificate_result
+   tls_certificate_result=${tls_certificate_result:-$default_certificate}
+   IFS= read -r -p "Certificate key path [$default_key]: " tls_key_result
+   tls_key_result=${tls_key_result:-$default_key}
+
+   if ! reverse_proxy_validate_tls_path "$tls_certificate_result" ||
+      ! reverse_proxy_validate_tls_path "$tls_key_result"; then
+      tls_certificate_result=''
+      tls_key_result=''
+      print_error 'Invalid path. Enter absolute paths using letters, digits and . _ / @ + - only.'
+      return 1
+   fi
+}
+
 task_add_reverse_proxy() {
-   local domain destination
+   local domain destination certificate certificate_key
 
    clear
    printf '%sAdd a new reverse proxy configuration%s\n\n' "$DIM" "$RESET"
@@ -448,8 +483,13 @@ task_add_reverse_proxy() {
       return
    fi
 
+   if ! prompt_reverse_proxy_tls "$domain" certificate certificate_key; then
+      wait_for_key
+      return
+   fi
+
    printf '\n%sSaving configuration and reloading Nginx...%s\n' "$DIM" "$RESET"
-   if ! reverse_proxy_apply_config "$domain" "$destination"; then
+   if ! reverse_proxy_apply_config "$domain" "$destination" "$certificate" "$certificate_key"; then
       print_error 'The configuration was not applied; the previous Nginx state was restored.'
       wait_for_key
       return
@@ -464,7 +504,12 @@ task_add_reverse_proxy() {
 task_modify_reverse_proxy() {
    local domain="$1"
    local destination="${reverse_proxy_destinations[$domain]}"
-   local new_destination
+   local new_destination certificate certificate_key
+   local current_certificate='' current_key=''
+
+   if [[ -n "${reverse_proxy_tls[$domain]+set}" ]]; then
+      IFS=$'	' read -r current_certificate current_key <<<"${reverse_proxy_tls[$domain]}"
+   fi
 
    clear
    printf '%sModify reverse proxy configuration for %s%s\n\n' "$DIM" "$domain" "$RESET"
@@ -476,14 +521,19 @@ task_modify_reverse_proxy() {
       wait_for_key
       return
    fi
-   if [[ "$new_destination" == "$destination" ]]; then
-      print_error 'The new destination is the same as the current destination.'
+   if ! prompt_reverse_proxy_tls "$domain" certificate certificate_key "$current_certificate" "$current_key"; then
+      wait_for_key
+      return
+   fi
+   if [[ "$new_destination" == "$destination" && "$certificate" == "$current_certificate" &&
+      "$certificate_key" == "$current_key" ]]; then
+      print_error 'The configuration is unchanged.'
       wait_for_key
       return
    fi
 
    printf '\n%sSaving configuration and reloading Nginx...%s\n' "$DIM" "$RESET"
-   if ! reverse_proxy_apply_config "$domain" "$new_destination"; then
+   if ! reverse_proxy_apply_config "$domain" "$new_destination" "$certificate" "$certificate_key"; then
       print_error 'The configuration was not applied; the previous Nginx state was restored.'
       wait_for_key
       return
