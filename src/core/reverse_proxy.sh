@@ -11,6 +11,8 @@ declare -gA reverse_proxy_destinations=()
 declare -gA reverse_proxy_files=()
 # domain -> "certificate<TAB>key" for domains served over HTTPS; absent for HTTP only.
 declare -gA reverse_proxy_tls=()
+# Directory Nginx serves for ACME HTTP-01 challenges (certbot --webroot).
+reverse_proxy_acme_webroot=/var/www/html
 
 reverse_proxy_run_config_command() {
    local directory="${settings[NGINX_CONFIG_DIR]}"
@@ -186,6 +188,7 @@ reverse_proxy_render_config() {
    local destination="$2"
    local certificate="${3-}"
    local certificate_key="${4-}"
+   local acme_bootstrap="${5-}"
 
    reverse_proxy_validate_domain "$domain" || return 2
    reverse_proxy_validate_destination "$destination" || return 2
@@ -199,7 +202,7 @@ reverse_proxy_render_config() {
       printf '    server_name %s;\n' "$domain"
       printf '\n'
       printf '    location /.well-known/acme-challenge/ {\n'
-      printf '        root /var/www/html;\n'
+      printf '        root %s;\n' "$reverse_proxy_acme_webroot"
       printf '    }\n'
       printf '\n'
       printf '    location / {\n'
@@ -217,6 +220,12 @@ reverse_proxy_render_config() {
       printf 'server {\n'
       printf '    listen 80;\n'
       printf '    server_name %s;\n' "$domain"
+      if [[ "$acme_bootstrap" == acme ]]; then
+         printf '\n'
+         printf '    location /.well-known/acme-challenge/ {\n'
+         printf '        root %s;\n' "$reverse_proxy_acme_webroot"
+         printf '    }\n'
+      fi
    fi
    printf '\n'
    printf '    location / {\n'
@@ -234,6 +243,7 @@ reverse_proxy_save_config() {
    local destination="$2"
    local certificate="${3-}"
    local certificate_key="${4-}"
+   local acme_bootstrap="${5-}"
    local directory="${settings[NGINX_CONFIG_DIR]}"
    local config_file temporary_file privileged_temporary_file
 
@@ -256,7 +266,7 @@ reverse_proxy_save_config() {
 
    config_file=$(reverse_proxy_config_path "$domain") || return
    temporary_file=$(mktemp) || return 1
-   if ! (umask 022; reverse_proxy_render_config "$domain" "$destination" "$certificate" "$certificate_key" >"$temporary_file"); then
+   if ! (umask 022; reverse_proxy_render_config "$domain" "$destination" "$certificate" "$certificate_key" "$acme_bootstrap" >"$temporary_file"); then
       rm -f -- "$temporary_file"
       return 1
    fi
@@ -301,6 +311,7 @@ reverse_proxy_apply_config() {
    local destination="$2"
    local certificate="${3-}"
    local certificate_key="${4-}"
+   local acme_bootstrap="${5-}"
    local config_file backup_file=""
 
    config_file=$(reverse_proxy_config_path "$domain") || return
@@ -312,7 +323,7 @@ reverse_proxy_apply_config() {
       }
    fi
 
-   if ! reverse_proxy_save_config "$domain" "$destination" "$certificate" "$certificate_key"; then
+   if ! reverse_proxy_save_config "$domain" "$destination" "$certificate" "$certificate_key" "$acme_bootstrap"; then
       [[ -n "$backup_file" ]] && rm -f -- "$backup_file"
       return 1
    fi
@@ -357,4 +368,109 @@ reverse_proxy_remove_config() {
    unset 'reverse_proxy_destinations[$domain]'
    unset 'reverse_proxy_files[$domain]'
    unset 'reverse_proxy_tls[$domain]'
+}
+
+# Validates the optional contact address passed to certbot (never written to a config).
+reverse_proxy_validate_email() {
+   local email="${1-}"
+   [[ -z "$email" ]] || {
+      ((${#email} <= 254)) && [[ "$email" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]
+   }
+}
+
+reverse_proxy_run_certbot() {
+   local domain="$1"
+   local email="${2-}"
+   local -a arguments=(
+      certonly --webroot -w "$reverse_proxy_acme_webroot" -d "$domain"
+      --non-interactive --agree-tos --keep-until-expiring
+   )
+
+   if [[ -n "$email" ]]; then
+      arguments+=(--email "$email")
+   else
+      arguments+=(--register-unsafely-without-email)
+   fi
+
+   if ((EUID == 0)); then
+      certbot "${arguments[@]}"
+   else
+      sudo -- certbot "${arguments[@]}"
+   fi
+}
+
+reverse_proxy_ensure_acme_webroot() {
+   local parent_directory
+
+   [[ -d "$reverse_proxy_acme_webroot" ]] && return 0
+   parent_directory=$(dirname -- "$reverse_proxy_acme_webroot")
+   if [[ -w "$parent_directory" ]] || ((EUID == 0)); then
+      mkdir -p -- "$reverse_proxy_acme_webroot"
+   else
+      sudo -- mkdir -p -- "$reverse_proxy_acme_webroot"
+   fi
+}
+
+# Restores the pre-certbot state of a domain's config (or removes it when there
+# was none), reloads Nginx and refreshes the cache from disk.
+reverse_proxy_restore_config() {
+   local config_file="$1"
+   local backup_file="${2-}"
+
+   if [[ -n "$backup_file" ]]; then
+      reverse_proxy_run_config_command mv -f -- "$backup_file" "$config_file"
+   else
+      reverse_proxy_run_config_command rm -f -- "$config_file"
+   fi
+   reverse_proxy_reload_nginx &>/dev/null || true
+   reverse_proxy_load_configs &>/dev/null || true
+}
+
+# Serves the domain over HTTPS with a free Let's Encrypt certificate:
+#  1. apply an HTTP config that answers ACME challenges, 2. run certbot,
+#  3. apply the final HTTPS config. Any failure restores the previous config.
+reverse_proxy_apply_config_with_certbot() {
+   local domain="$1"
+   local destination="$2"
+   local email="${3-}"
+   local config_file backup_file=""
+
+   config_file=$(reverse_proxy_config_path "$domain") || return
+   reverse_proxy_validate_destination "$destination" || return 2
+   reverse_proxy_validate_email "$email" || {
+      printf 'Invalid email address: %s\n' "$email" >&2
+      return 2
+   }
+   if ! command -v certbot >/dev/null; then
+      printf 'certbot is not installed. Install it first (for example: sudo apt install certbot).\n' >&2
+      return 1
+   fi
+   reverse_proxy_ensure_acme_webroot || return 1
+
+   if [[ -f "$config_file" ]]; then
+      backup_file=$(mktemp) || return 1
+      cp -p -- "$config_file" "$backup_file" || {
+         rm -f -- "$backup_file"
+         return 1
+      }
+   fi
+
+   if ! reverse_proxy_apply_config "$domain" "$destination" '' '' acme; then
+      [[ -n "$backup_file" ]] && rm -f -- "$backup_file"
+      return 1
+   fi
+   if ! reverse_proxy_run_certbot "$domain" "$email"; then
+      printf 'certbot could not issue a certificate. Check that the domain points at this server and port 80 is reachable.\n' >&2
+      reverse_proxy_restore_config "$config_file" "$backup_file"
+      return 1
+   fi
+   if ! reverse_proxy_apply_config "$domain" "$destination" \
+      "$(reverse_proxy_default_certificate_path "$domain")" \
+      "$(reverse_proxy_default_certificate_key_path "$domain")"; then
+      reverse_proxy_restore_config "$config_file" "$backup_file"
+      return 1
+   fi
+
+   [[ -n "$backup_file" ]] && rm -f -- "$backup_file"
+   return 0
 }

@@ -92,4 +92,44 @@ test_run 'Switch back to HTTP only' reverse_proxy_apply_config secure.example lo
 test_run 'Drop 443 listener' bash -c '! grep -q 443 "$1"' _ "$temporary_dir/secure.example.conf"
 test_assert_equal 'Clear TLS cache entry' '0' "${#reverse_proxy_tls[@]}"
 
+# Automatic certificates via certbot (certbot and Nginx are stubbed).
+reverse_proxy_acme_webroot="$temporary_dir/webroot"
+test_run 'Accept empty email' reverse_proxy_validate_email ''
+test_run 'Accept valid email' reverse_proxy_validate_email admin@example.com
+test_assert_status 'Reject malformed email' 1 reverse_proxy_validate_email 'a b@example.com'
+test_assert_status 'Reject option-like email' 1 reverse_proxy_validate_email '--email@x'
+
+acme_config=$(reverse_proxy_render_config auto.example localhost:3000 '' '' acme)
+test_assert_equal 'Serve ACME challenge in bootstrap config' '1' "$(grep -c 'acme-challenge' <<<"$acme_config")"
+test_assert_equal 'Use configured webroot' '1' "$(grep -c "root $reverse_proxy_acme_webroot;" <<<"$acme_config")"
+test_assert_equal 'Keep proxying in bootstrap config' '1' "$(grep -c 'proxy_pass http://localhost:3000;' <<<"$acme_config")"
+test_assert_equal 'Skip 443 in bootstrap config' '0' "$(grep -c 443 <<<"$acme_config")"
+
+reverse_proxy_reload_nginx() { return 0; }
+unset -f certbot 2>/dev/null
+if ! command -v certbot >/dev/null; then
+   test_assert_status 'Report missing certbot' 1 reverse_proxy_apply_config_with_certbot auto.example localhost:3000
+fi
+certbot() { :; }
+test_assert_status 'Reject invalid certbot email' 2 reverse_proxy_apply_config_with_certbot auto.example localhost:3000 'bad email'
+
+certbot_log="$temporary_dir/certbot.log"
+reverse_proxy_run_certbot() { printf '%s|%s\n' "$1" "$2" >>"$certbot_log"; }
+test_run 'Issue certificate and apply HTTPS' reverse_proxy_apply_config_with_certbot auto.example localhost:3000 admin@example.com
+test_assert_equal 'Pass domain and email to certbot' 'auto.example|admin@example.com' "$(cat "$certbot_log")"
+test_run 'Create ACME webroot' test -d "$reverse_proxy_acme_webroot"
+test_run 'Write Let'"'"'s Encrypt certificate' grep -q 'ssl_certificate /etc/letsencrypt/live/auto.example/fullchain.pem;' "$temporary_dir/auto.example.conf"
+test_run 'Listen on 443 after issuing' grep -q 'listen 443 ssl;' "$temporary_dir/auto.example.conf"
+test_assert_equal 'Cache automatic certificate' '/etc/letsencrypt/live/auto.example/fullchain.pem' "${reverse_proxy_tls[auto.example]%%$'\t'*}"
+
+reverse_proxy_run_certbot() { return 1; }
+rm -f -- "$temporary_dir/auto.example.conf"
+test_assert_status 'Report failed certificate issue' 1 reverse_proxy_apply_config_with_certbot auto.example localhost:3000
+test_run 'Remove config when issuing fails' test ! -e "$temporary_dir/auto.example.conf"
+
+reverse_proxy_save_config plain2.example localhost:4000
+test_assert_status 'Report failed issue for existing domain' 1 reverse_proxy_apply_config_with_certbot plain2.example localhost:4000
+test_run 'Restore previous config when issuing fails' grep -q 'listen 80;' "$temporary_dir/plain2.example.conf"
+test_run 'Drop bootstrap challenge on failure' bash -c '! grep -q acme-challenge "$1"' _ "$temporary_dir/plain2.example.conf"
+
 test_finish

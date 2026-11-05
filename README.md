@@ -10,6 +10,12 @@
 Reverse-proxy tasks additionally require Nginx and systemd, plus permission to write to the
 configured Nginx directory and reload Nginx.
 
+Reverse proxies serve HTTP only by default. Choosing HTTPS when adding or modifying one offers to
+get a free Let's Encrypt certificate automatically with `certbot` (install it first, for example
+`sudo apt install certbot`; the domain must already point at the server with port 80 reachable),
+or to use certificate and key paths you supply. A failed certificate request restores the
+previous Nginx configuration.
+
 Installing MongoDB adds the official MongoDB 9.0 APT repository and requires Ubuntu or Debian on
 amd64 (with AVX CPU support) or arm64.
 
