@@ -372,7 +372,7 @@ settings_validate_value() {
       ;;
    MENU_BORDER_TYPE)
       normalized=${value^^}
-      [[ "$normalized" == LIGHT || "$normalized" == HEAVY ]]
+      [[ "$normalized" == LIGHT || "$normalized" == HEAVY || "$normalized" == ROUNDED ]]
       ;;
    MENU_BORDER_COLOR | MENU_POINTER_COLOR)
       normalized=${value^^}
@@ -393,7 +393,7 @@ settings_validate_value() {
 settings_choice_values() {
    case "$1" in
    MENU_BORDER_TYPE)
-      printf '%s\n' LIGHT HEAVY
+      printf '%s\n' LIGHT HEAVY ROUNDED
       ;;
    MENU_BORDER_COLOR | MENU_POINTER_COLOR)
       printf '%s\n' BLACK RED GREEN YELLOW BLUE MAGENTA CYAN WHITE DEFAULT

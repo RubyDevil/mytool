@@ -107,7 +107,8 @@ build_menu_settings
 test_assert_equal 'Build settings menu items' '6' "${#menu_labels[@]}"
 test_assert_equal 'Sort setting entries' 'MENU_BORDER_COLOR (current: WHITE)' "$(strip_ansi "${menu_labels[0]}")"
 test_run 'Accept configured heavy border' settings_validate_value MENU_BORDER_TYPE heavy
-test_assert_status 'Reject unknown border' 1 settings_validate_value MENU_BORDER_TYPE rounded
+test_run 'Accept configured rounded border' settings_validate_value MENU_BORDER_TYPE rounded
+test_assert_status 'Reject unknown border' 1 settings_validate_value MENU_BORDER_TYPE double
 test_assert_status 'Reject wide pointer' 1 settings_validate_value MENU_POINTER_TYPE '>>'
 
 build_menu_settings MENU_BORDER_TYPE
@@ -116,6 +117,7 @@ test_run 'Open border choices' menu_invoke 1
 test_assert_equal 'Build border choice menu' 'Choose MENU_BORDER_TYPE' "$menu_header"
 test_assert_equal 'List light border choice' 'LIGHT (current)' "$(strip_ansi "${menu_labels[0]}")"
 test_assert_equal 'List heavy border choice' 'HEAVY' "$(strip_ansi "${menu_labels[1]}")"
+test_assert_equal 'List rounded border choice' 'ROUNDED' "$(strip_ansi "${menu_labels[2]}")"
 test_run 'Go back from border choices' menu_go_back
 test_assert_equal 'Return to the edited setting' 'Edit Setting:MENU_BORDER_TYPE' "$menu_header:${menu_arguments[0:0]}"
 

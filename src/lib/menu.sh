@@ -26,6 +26,12 @@ declare -gA MENU_BORDER_HEAVY=(
    [0111]="┳" [1000]="╹" [1001]="┛" [1010]="┃" [1011]="┫" [1100]="┗"
    [1101]="┻" [1110]="┣" [1111]="╋"
 )
+declare -gA MENU_BORDER_ROUNDED=()
+for menu_border_key in "${!MENU_BORDER_LIGHT[@]}"; do
+   MENU_BORDER_ROUNDED[$menu_border_key]="${MENU_BORDER_LIGHT[$menu_border_key]}"
+done
+unset menu_border_key
+MENU_BORDER_ROUNDED+=([0110]="╭" [0011]="╮" [1001]="╯" [1100]="╰")
 
 declare -g menu_header="Menu"
 declare -g menu_tab="    "
@@ -305,6 +311,7 @@ menu_resolve_color() {
 menu_border_char_into() {
    case "${settings[MENU_BORDER_TYPE]^^}" in
    HEAVY) printf -v "$1" '%s' "${MENU_BORDER_HEAVY[$2]}" ;;
+   ROUNDED) printf -v "$1" '%s' "${MENU_BORDER_ROUNDED[$2]}" ;;
    *) printf -v "$1" '%s' "${MENU_BORDER_LIGHT[$2]}" ;;
    esac
 }

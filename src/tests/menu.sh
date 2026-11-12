@@ -36,6 +36,15 @@ heavy_first_line=$(printf '%s\n' "$heavy_render" | head -n 1)
 plain_heavy_first_line=$(strip_ansi "$heavy_first_line")
 test_assert_equal 'Render heavy border' '┏' "${plain_heavy_first_line:0:1}"
 
+settings[MENU_BORDER_TYPE]=ROUNDED
+rounded_render=$(strip_ansi "$(menu_render)")
+rounded_first_line=$(head -n 1 <<<"$rounded_render")
+rounded_last_line=$(tail -n 1 <<<"$rounded_render")
+test_assert_equal 'Render rounded top corners' '╭╮' "${rounded_first_line:0:1}${rounded_first_line: -1}"
+test_assert_equal 'Render rounded bottom corners' '╰╯' "${rounded_last_line:0:1}${rounded_last_line: -1}"
+rounded_divider=$(sed -n 3p <<<"$rounded_render")
+test_assert_equal 'Render rounded light divider' '├' "${rounded_divider:0:1}"
+
 menu_prepare_layout
 menu_move_up
 test_assert_equal 'Wrap upward and scroll' '2:1' "$selected_index:$top_option"
